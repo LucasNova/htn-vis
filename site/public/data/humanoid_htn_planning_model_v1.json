@@ -1,0 +1,4432 @@
+{
+  "schema_version": "humanoid_htn_visualizer_v1",
+  "language": "ru",
+  "purpose": "Единый HTN-oriented JSON для визуализации и обсуждения поведения гуманоидных агентов с огнестрельным оружием. Файл описывает compound tasks, альтернативные methods, primitive actions, cost/utility, hard blockers, derived facts и сценарии.",
+  "scope": {
+    "included": [
+      "HTN-планирование наперед через задачи, методы и примитивные действия",
+      "оценка стоимости/пользы плана",
+      "технические derived facts: LOS, LKP, exposure, cover route risk, reappearance risk",
+      "сквадовая осведомленность без ролей командиров/штурмовиков",
+      "скрытая передача фактов внутри сквада без voice/callout actions",
+      "fallback-ветки, если лучший на вид план опасен"
+    ],
+    "not_included": [
+      "голосовые реплики и say/shout/callout действия",
+      "разделение участников сквада на роли",
+      "детальное описание Mass/HTN/StateTree архитектуры Unreal",
+      "анимационные графы и конкретные montage/state names",
+      "магическое знание точной позиции игрока без источника данных"
+    ]
+  },
+  "viewer_instructions": {
+    "root_task": "task.root_survive_and_operate",
+    "node_types": {
+      "compound_task": "Папка/узел высокого уровня. Не исполняется напрямую. Содержит альтернативные methods.",
+      "method": "Альтернативный способ решить compound_task. Имеет preconditions, hard_blockers, cost/utility и decomposition.",
+      "primitive_action": "Лист HTN. Это то, что может быть исполнено игровым кодом.",
+      "derived_fact": "Калькулятор/blackboard fact. Не является действием. Используется в preconditions, hard_blockers и cost terms.",
+      "world_state_field": "Входной или сохраненный параметр мира/агента.",
+      "scenario": "Пример входной ситуации для теста планировщика. Не runtime-узел."
+    },
+    "how_to_render": [
+      "Покажи root_task как корневой узел.",
+      "Под task показывай его methods как конкурирующие карточки, а не как последовательность.",
+      "Внутри method показывай decomposition как упорядоченный список children: task/action/ref.",
+      "По клику на child task проваливайся в его methods.",
+      "По клику на action показывай duration, cost, risks, effects, fail_conditions.",
+      "По клику на condition показывай использованные derived_facts/world_state_fields.",
+      "Для каждого method показывай: preconditions, hard_blockers, score_terms, projected_effects, decomposition.",
+      "Отдельной панелью показывай derived_facts: как вычисляются LOS, LKP, CoverRouteRisk, ReappearanceRisk и т.п.",
+      "Отдельной панелью показывай global_hard_blockers, чтобы было видно, почему план запрещен несмотря на высокий score."
+    ],
+    "planner_algorithm_hint": [
+      "1. Стартуй с root_task.",
+      "2. Для compound_task найди все methods, где preconditions истинны или частично истинны.",
+      "3. Отбрось methods, где сработал хотя бы один hard_blocker.",
+      "4. Для оставшихся methods рекурсивно разложи decomposition в primitive_actions.",
+      "5. Делай forward projection: projected_effects каждого действия временно меняют planning_state для следующих шагов.",
+      "6. Считай score метода/плана через weights из planner.score_model.",
+      "7. Выбирай не самый короткий и не самый агрессивный план, а лучший по expected utility с учетом risk/death/exposure.",
+      "8. Replan нужен не как behavior-tree tick, а когда изменились ключевые факты: новая видимость, урон, граната, cover стал invalid, магазин пуст, LKP устарела."
+    ],
+    "important_convention": [
+      "Tasks и methods — это HTN-планирование наперед; они не должны выглядеть как reactive BT selector.",
+      "Реактивность оформляется как replan_trigger или global_hard_blocker, а не как постоянный if/else на каждом узле.",
+      "Все абстрактные понятия вроде 'опасный угол' должны быть представлены как derived_fact с техническим расчетом.",
+      "Если конечная точка хорошая, но path к ней смертелен, план должен проигрывать или hard-block-иться."
+    ]
+  },
+  "planner": {
+    "planning_horizon_sec": {
+      "immediate_survival": [
+        0.2,
+        2.0
+      ],
+      "combat_exchange": [
+        1.0,
+        6.0
+      ],
+      "search_or_pursuit": [
+        4.0,
+        18.0
+      ],
+      "objective_recovery": [
+        10.0,
+        45.0
+      ]
+    },
+    "score_model": {
+      "score_formula": "utility_score - cost_score - risk_score - uncertainty_score",
+      "utility_score_terms": {
+        "survival_gain": 9.0,
+        "position_gain": 3.5,
+        "threat_pressure": 2.8,
+        "info_gain": 1.6,
+        "objective_gain": 2.2,
+        "squad_coherence_gain": 1.0
+      },
+      "cost_score_terms": {
+        "movement_cost": 1.2,
+        "time_cost": 0.9,
+        "ammo_cost": 0.7,
+        "stamina_cost": 0.5,
+        "plan_complexity": 0.4
+      },
+      "risk_score_terms": {
+        "exposure_risk": 9.5,
+        "expected_death_risk": 13.0,
+        "flank_risk": 4.5,
+        "grenade_risk": 7.0,
+        "reload_vulnerability": 5.5
+      },
+      "uncertainty_score_terms": {
+        "threat_uncertainty": 2.5,
+        "stale_lkp_penalty": 2.0,
+        "unknown_incoming_direction_penalty": 2.8,
+        "squad_dependency": 0.8
+      },
+      "aggregation": {
+        "primitive_action_sequence": "sum costs, max critical risks, add terminal utility",
+        "path_risk": "integrate exposure along path; do not average away lethal peaks",
+        "plan_failure": "expected_score *= success_probability; hard blockers override score"
+      }
+    },
+    "thresholds": {
+      "hardblock_expected_death_risk": 0.82,
+      "hardblock_exposure_under_confirmed_fire": 0.78,
+      "safe_cover_route_risk_max": 0.45,
+      "acceptable_cover_route_risk_max": 0.65,
+      "safe_reload_window_min_sec_since_fire": 1.8,
+      "fresh_lkp_max_age_sec": 6.0,
+      "stale_lkp_age_sec": 18.0,
+      "high_suppression": 0.7,
+      "critical_threat": 0.75,
+      "minimum_plan_score_to_execute": 0.0,
+      "switch_plan_hysteresis_delta": 1.5
+    }
+  },
+  "world_state_fields": {
+    "agent.health_state": {
+      "type": "enum",
+      "description": "Состояние здоровья агента.",
+      "values": [
+        "healthy",
+        "light_wounded",
+        "heavy_wounded",
+        "critical",
+        "dead"
+      ],
+      "default": "healthy"
+    },
+    "agent.mobility": {
+      "type": "float",
+      "description": "Способность быстро двигаться с учетом ранений/усталости/анимаций.",
+      "range": [
+        0,
+        1
+      ],
+      "default": 1
+    },
+    "agent.morale": {
+      "type": "float",
+      "description": "Готовность продолжать рискованные боевые действия.",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.6
+    },
+    "agent.fear": {
+      "type": "float",
+      "description": "Текущий страх смерти/склонность к самосохранению.",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.25
+    },
+    "agent.suppression": {
+      "type": "float",
+      "description": "Подавленность огнем/взрывами/near miss.",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0
+    },
+    "agent.weapon.ammo_in_mag": {
+      "type": "int",
+      "description": "Патроны в текущем магазине."
+    },
+    "agent.weapon.mag_capacity": {
+      "type": "int",
+      "description": "Вместимость магазина."
+    },
+    "agent.weapon.total_ammo": {
+      "type": "int",
+      "description": "Общий боезапас."
+    },
+    "agent.weapon.ready": {
+      "type": "bool",
+      "description": "Оружие можно использовать прямо сейчас."
+    },
+    "agent.position": {
+      "type": "vector",
+      "description": "Текущая позиция агента."
+    },
+    "agent.current_cover_id": {
+      "type": "id|null",
+      "description": "Текущая занятая точка укрытия."
+    },
+    "threat.has_los": {
+      "type": "bool",
+      "description": "Есть ли прямая видимость текущей угрозы."
+    },
+    "threat.visible_fraction": {
+      "type": "float",
+      "description": "Доля капсулы/важных trace-points цели, которые видны агенту.",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "threat.last_known_position": {
+      "type": "vector|null",
+      "description": "Последняя известная или предполагаемая позиция угрозы."
+    },
+    "threat.last_seen_position": {
+      "type": "vector|null",
+      "description": "Последняя позиция, где агент лично видел угрозу."
+    },
+    "threat.last_heard_position": {
+      "type": "vector|null",
+      "description": "Последняя позиция/область, откуда агент слышал стимул."
+    },
+    "threat.lkp_age_sec": {
+      "type": "float",
+      "description": "Возраст LKP в секундах.",
+      "range": [
+        0,
+        999
+      ]
+    },
+    "threat.direction": {
+      "type": "vector|null",
+      "description": "Примерное направление угрозы относительно агента."
+    },
+    "threat.confidence": {
+      "type": "float",
+      "description": "Уверенность в знании угрозы.",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "threat.incoming_fire": {
+      "type": "float",
+      "description": "Уверенность, что по агенту или рядом ведут огонь.",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "threat.near_miss_recent": {
+      "type": "bool",
+      "description": "Была ли недавно пуля/impact рядом."
+    },
+    "threat.damage_recent": {
+      "type": "bool",
+      "description": "Получил ли агент урон недавно."
+    },
+    "threat.distance_m": {
+      "type": "float",
+      "description": "Оценка дистанции до угрозы или LKP."
+    },
+    "environment.cover_candidates": {
+      "type": "array",
+      "description": "Кандидаты укрытий с геометрией, route и cover point данными."
+    },
+    "environment.danger_zones": {
+      "type": "array",
+      "description": "Простреливаемые/опасные зоны, полученные из LKP, impact, squad facts, visibility analysis."
+    },
+    "environment.threat_emergence_points": {
+      "type": "array",
+      "description": "Точки, из которых угроза может восстановить LOS к агенту или его маршруту в горизонте планирования."
+    },
+    "squad.allies_nearby_count": {
+      "type": "int",
+      "description": "Количество боеспособных участников сквада рядом."
+    },
+    "squad.ally_has_los": {
+      "type": "bool",
+      "description": "Кто-то из сквада видит угрозу."
+    },
+    "squad.shared_lkp": {
+      "type": "vector|null",
+      "description": "LKP, известная скваду."
+    },
+    "squad.shared_lkp_confidence": {
+      "type": "float",
+      "description": "Уверенность в SharedLKP.",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "squad.occupied_cover_ids": {
+      "type": "array",
+      "description": "Укрытия, занятые или зарезервированные союзниками."
+    },
+    "objective.type": {
+      "type": "enum",
+      "description": "Текущая локальная задача агента.",
+      "values": [
+        "guard_area",
+        "hold_position",
+        "patrol",
+        "search",
+        "none"
+      ],
+      "default": "guard_area"
+    },
+    "objective.importance": {
+      "type": "float",
+      "description": "Насколько важно не покидать текущую зону/позицию.",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.5
+    }
+  },
+  "derived_facts": {
+    "fact.los_quality": {
+      "name": "LOS Quality",
+      "category": "perception",
+      "output": "float 0..1",
+      "inputs": [
+        "threat.has_los",
+        "threat.visible_fraction",
+        "visibility modifiers: darkness/smoke/concealment/distance"
+      ],
+      "calculation": [
+        "Trace not only to actor origin, but to head/chest/pelvis/weapon-side sample points.",
+        "visible_fraction = visible_samples / total_samples.",
+        "los_quality = visible_fraction * visibility_modifier * focus_modifier.",
+        "If has_los=false then los_quality=0."
+      ],
+      "used_by": [
+        "method.combat.direct_engage_from_cover",
+        "method.combat.exposed_snap_then_cover",
+        "fact.threat_confidence"
+      ],
+      "notes": "LOS не значит 'точно и навсегда знаю'. Это только текущая геометрическая видимость."
+    },
+    "fact.threat_confidence": {
+      "name": "Threat Confidence",
+      "category": "memory",
+      "output": "float 0..1",
+      "inputs": [
+        "fact.los_quality",
+        "threat.lkp_age_sec",
+        "threat.near_miss_recent",
+        "threat.damage_recent",
+        "squad.shared_lkp_confidence",
+        "sound localization accuracy"
+      ],
+      "calculation": [
+        "visual = los_quality.",
+        "damage = damage_direction_quality * recent_damage_weight.",
+        "near_miss = impact_direction_quality * recent_near_miss_weight.",
+        "sound = sound_threat_level * sound_localization_accuracy * sound_freshness.",
+        "squad = shared_lkp_confidence * squad_info_trust.",
+        "base = max(visual, damage, near_miss, sound, squad).",
+        "confidence = base * exp(-lkp_age_sec / memory_decay_sec), except current visual can stay near 1."
+      ],
+      "used_by": [
+        "all combat/search/pursuit methods"
+      ],
+      "pseudocode": "confidence = max(visual, damage, nearMiss, sound, squad) * freshnessDecay"
+    },
+    "fact.current_position_survivability": {
+      "name": "Current Position Survivability",
+      "category": "survival",
+      "output": "float 0..1",
+      "inputs": [
+        "agent.current_cover_id",
+        "fact.los_quality",
+        "threat.incoming_fire",
+        "fact.reappearance_risk",
+        "health_state"
+      ],
+      "calculation": [
+        "Start from cover protection against threat direction.",
+        "Subtract current LOS exposure if the agent is visible to threat/lkp emergence points.",
+        "Subtract incoming fire and suppression pressure.",
+        "Subtract flank/reappearance risk from nearby corners/doors.",
+        "Clamp to 0..1."
+      ],
+      "used_by": [
+        "task.survive_immediate_threat",
+        "method.combat.hold_current_cover"
+      ]
+    },
+    "fact.threat_emergence_points": {
+      "name": "Threat Emergence Points",
+      "category": "geometry",
+      "output": "array of candidate points",
+      "inputs": [
+        "threat.last_known_position",
+        "navmesh",
+        "doors/portals/corners",
+        "cover edges",
+        "planning horizon",
+        "enemy estimated speed"
+      ],
+      "calculation": [
+        "Generate points around LKP from: nearby cover edges, doorway thresholds, corridor corners, navmesh portals, windows and positions with LOS to agent/current route.",
+        "For each point compute nav_time_from_lkp using estimated enemy speed.",
+        "Keep points where nav_time_from_lkp <= planning_horizon_sec.",
+        "For each kept point run line traces to agent current position and to route samples of candidate plans.",
+        "Store los_to_agent, los_to_route, cover_affordance_at_point, distance, angle."
+      ],
+      "used_by": [
+        "fact.reappearance_risk",
+        "fact.cover_route_risk",
+        "method.lost_contact.hold_lkp_angle",
+        "method.search.cover_to_cover_to_lkp"
+      ],
+      "notes": "Это техническая замена абстракции 'противник может выглянуть из-за угла'. Система не угадывает намерение игрока, а оценивает достижимые точки восстановления LOS из LKP."
+    },
+    "fact.reappearance_risk": {
+      "name": "Reappearance Risk",
+      "category": "geometry/risk",
+      "output": "float 0..1",
+      "inputs": [
+        "fact.threat_emergence_points",
+        "fact.threat_confidence",
+        "threat.lkp_age_sec",
+        "enemy estimated speed",
+        "agent current position"
+      ],
+      "calculation": [
+        "For each emergence point: reachability = clamp01(1 - nav_time_from_lkp / horizon).",
+        "los_factor = max(los_to_agent, los_to_route_samples).",
+        "peek_affordance = cover_or_corner_affordance_at_point.",
+        "freshness = exp(-lkp_age_sec / reappearance_decay_sec).",
+        "point_score = threat_confidence * freshness * reachability * (0.65*los_factor + 0.35*peek_affordance).",
+        "reappearance_risk = max(point_scores) or weighted top-k, not average over many safe points."
+      ],
+      "used_by": [
+        "method.lost_contact.hold_lkp_angle",
+        "method.survive.break_los_lateral",
+        "method.combat.reposition_short_safe"
+      ],
+      "pseudocode": "risk = max(conf*fresh*reach*(0.65*los+0.35*peekAffordance) for p in emergencePoints)"
+    },
+    "fact.cover_score": {
+      "name": "Cover Score",
+      "category": "cover",
+      "output": "float 0..1 per candidate cover",
+      "inputs": [
+        "cover geometry",
+        "threat.direction",
+        "fact.cover_route_risk",
+        "squad.occupied_cover_ids",
+        "objective",
+        "firing line from cover"
+      ],
+      "calculation": [
+        "protection = ballistic/geometric protection from current threat direction and emergence points.",
+        "route_safety = 1 - cover_route_risk.",
+        "fire_window = quality of peek/firing line from cover to threat or LKP.",
+        "escape = availability of secondary exit/next cover.",
+        "occupancy = penalty if reserved/occupied by squadmate.",
+        "objective = bonus if cover keeps agent relevant to current objective.",
+        "grenade/flank penalties reduce score.",
+        "cover_score = 0.35*protection + 0.25*route_safety + 0.15*fire_window + 0.10*escape + 0.10*occupancy + 0.05*objective - penalties."
+      ],
+      "used_by": [
+        "method.position.select_nearest_safe_cover",
+        "method.position.select_better_cover",
+        "method.survive.use_near_safe_cover"
+      ],
+      "notes": "CoverScore обязан включать риск пути. Иначе дальнее хорошее укрытие будет ошибочно выигрывать."
+    },
+    "fact.cover_route_risk": {
+      "name": "Cover Route Risk",
+      "category": "movement/risk",
+      "output": "float 0..1 per candidate path",
+      "inputs": [
+        "candidate path",
+        "threat.direction",
+        "fact.threat_emergence_points",
+        "incoming fire",
+        "agent.mobility",
+        "health_state",
+        "path length"
+      ],
+      "calculation": [
+        "Sample candidate path every 0.5m or 0.25 sec of movement.",
+        "At each sample compute visible_to_known_threat = trace from threat/LKP/emergence points to sample capsule points.",
+        "Compute local_cover = nearby obstacle protection from threat direction.",
+        "Compute time_exposed = sample_interval / movement_speed_modified_by_health.",
+        "sample_risk = threat_confidence * weapon_lethality * visible_to_known_threat * (1 - local_cover) * time_exposed.",
+        "Integrate path risk with lethal-peak preservation: risk = 1 - product(1 - sample_risk), plus penalty for long open segments.",
+        "If there is no known direction, use conservative omni/impact-derived sectors instead of exact source."
+      ],
+      "used_by": [
+        "global_hard_blockers.suicidal_open_run",
+        "method.survive.use_near_safe_cover",
+        "method.search.cover_to_cover_to_lkp",
+        "method.pursuit.cautious_cover_to_cover"
+      ],
+      "pseudocode": "pathRisk = 1 - Π(1 - sampleRisk[i]); if maxOpenSegmentSec > limit add penalty"
+    },
+    "fact.expected_death_risk": {
+      "name": "Expected Death Risk",
+      "category": "risk",
+      "output": "float 0..1 per action/plan",
+      "inputs": [
+        "fact.cover_route_risk",
+        "fact.current_position_survivability",
+        "action duration",
+        "threat confidence",
+        "weapon lethality",
+        "health_state"
+      ],
+      "calculation": [
+        "For stationary actions: use current exposure, duration and threat confidence.",
+        "For movement actions: use integrated cover_route_risk.",
+        "Apply health multiplier: wounded/critical agents have higher death risk for same exposure.",
+        "Expected death risk is a hard blocker when above threshold, not just a numeric penalty."
+      ],
+      "used_by": [
+        "all method hard_blockers",
+        "planner.score_model"
+      ]
+    },
+    "fact.safe_reload_window": {
+      "name": "Safe Reload Window",
+      "category": "weapon/safety",
+      "output": "bool + confidence",
+      "inputs": [
+        "agent.current_cover_id",
+        "fact.current_position_survivability",
+        "threat.has_los",
+        "threat.incoming_fire",
+        "time_since_last_fire",
+        "threat.distance_m",
+        "fact.reappearance_risk"
+      ],
+      "calculation": [
+        "true if agent is behind valid cover or has broken LOS.",
+        "false if confirmed visible threat has LOS to agent.",
+        "false if incoming fire was very recent unless cover is strong.",
+        "false if close threat distance is below close-threat threshold.",
+        "reduced confidence if reappearance_risk is high."
+      ],
+      "used_by": [
+        "method.reload.emergency_in_cover",
+        "method.reload.tactical_reload_before_next_phase"
+      ]
+    },
+    "fact.pursuit_viability": {
+      "name": "Pursuit Viability",
+      "category": "tactics",
+      "output": "float 0..1",
+      "inputs": [
+        "threat.lkp_age_sec",
+        "fact.threat_confidence",
+        "fact.cover_route_risk",
+        "health_state",
+        "ammo",
+        "suppression",
+        "objective.importance",
+        "squad awareness"
+      ],
+      "calculation": [
+        "Start with freshness/confidence of LKP.",
+        "Subtract route risk to next cover step toward LKP.",
+        "Subtract wound/suppression/low ammo penalties.",
+        "Subtract objective penalty if leaving objective is bad.",
+        "Add squad info bonus if allies have LOS or nearby coverage, but do not require roles."
+      ],
+      "used_by": [
+        "method.pursuit.cautious_cover_to_cover",
+        "method.pursuit.hold_instead_of_chase"
+      ]
+    },
+    "fact.safe_peek_window": {
+      "name": "Safe Peek Window",
+      "category": "combat/safety",
+      "output": "bool + suggested duration",
+      "inputs": [
+        "current cover quality",
+        "suppression",
+        "incoming fire",
+        "threat confidence",
+        "reappearance risk",
+        "health_state"
+      ],
+      "calculation": [
+        "Peek is allowed when cover exists and exposure duration can be kept below calculated limit.",
+        "Suggested duration shrinks with suppression, wounds and high reappearance risk.",
+        "If incoming fire is very high, peek may be blocked unless it is needed for immediate self-defense."
+      ],
+      "used_by": [
+        "method.combat.direct_engage_from_cover",
+        "action.peek_and_sample_los",
+        "action.fire_controlled_burst"
+      ]
+    },
+    "fact.reload_need": {
+      "name": "Reload Need",
+      "category": "weapon",
+      "output": "float 0..1",
+      "inputs": [
+        "ammo_in_mag",
+        "mag_capacity",
+        "expected_rounds_needed",
+        "threat phase",
+        "total ammo"
+      ],
+      "calculation": [
+        "mag_ratio = ammo_in_mag / mag_capacity.",
+        "expected_rounds_needed = enemy_count_estimate * burst_cost * stress_multiplier + reserve.",
+        "reload_need is high if ammo_in_mag < expected_rounds_needed.",
+        "Emergency reload if ammo_in_mag == 0.",
+        "Tactical reload only if safe_reload_window is true."
+      ],
+      "used_by": [
+        "task.manage_ammo",
+        "method.reload.tactical_reload_before_next_phase",
+        "method.reload.switch_or_hide_when_empty"
+      ]
+    },
+    "fact.search_area_score": {
+      "name": "Search Area Score",
+      "category": "search",
+      "output": "float 0..1 per area",
+      "inputs": [
+        "LKP",
+        "threat confidence",
+        "age",
+        "nav connectivity",
+        "recent sounds",
+        "squad shared facts",
+        "danger zones"
+      ],
+      "calculation": [
+        "Higher near recent LKP and recent stimulus positions.",
+        "Lower if area is already checked by self/squad recently.",
+        "Higher if area has plausible escape route from LKP.",
+        "Search areas with high danger require safer movement methods."
+      ],
+      "used_by": [
+        "method.search.cover_to_cover_to_lkp",
+        "method.search.hold_and_scan_if_area_too_dangerous"
+      ]
+    },
+    "fact.squad_coherence": {
+      "name": "Squad Coherence",
+      "category": "squad",
+      "output": "float 0..1",
+      "inputs": [
+        "allies_nearby_count",
+        "ally positions",
+        "occupied cover",
+        "shared LKP",
+        "ally_has_los"
+      ],
+      "calculation": [
+        "Measures whether selected action keeps agent useful to squad without assigning roles.",
+        "Penalty for colliding/stacking on same cover.",
+        "Bonus for keeping spacing and not blocking ally LOS/path.",
+        "Bonus if action contributes to shared threat knowledge or uses shared information sensibly."
+      ],
+      "used_by": [
+        "planner.score_model",
+        "method.position.select_better_cover",
+        "method.pursuit.cautious_cover_to_cover"
+      ]
+    },
+    "fact.objective_pressure": {
+      "name": "Objective Pressure",
+      "category": "objective",
+      "output": "float 0..1",
+      "inputs": [
+        "objective.type",
+        "objective.importance",
+        "distance from objective",
+        "threat proximity to objective"
+      ],
+      "calculation": [
+        "High if agent must hold area or prevent passage.",
+        "Reduces viability of long pursuit/fallback.",
+        "Does not override immediate survival hard blockers."
+      ],
+      "used_by": [
+        "method.pursuit.hold_instead_of_chase",
+        "method.fallback.short_fallback_keep_objective"
+      ]
+    }
+  },
+  "global_hard_blockers": {
+    "blocker.suicidal_open_run": {
+      "title": "Запрет самоубийственной перебежки через открытую зону",
+      "condition_expr": "fact.cover_route_risk > 0.78 AND threat.incoming_fire > 0.45 AND no_intermediate_cover == true",
+      "blocks": [
+        "action.move_to_cover",
+        "action.move_cover_to_cover_step",
+        "action.pursue_toward_lkp"
+      ],
+      "reason": "Даже хорошее дальнее укрытие невыгодно, если путь к нему почти гарантированно смертелен.",
+      "safer_alternatives": [
+        "method.survive.local_profile_reduce",
+        "method.survive.break_los_lateral",
+        "method.combat.suppress_then_move",
+        "method.fallback.short_fallback_keep_objective"
+      ]
+    },
+    "blocker.exposed_reload_vs_confirmed_threat": {
+      "title": "Запрет перезарядки в открытую при подтвержденной угрозе",
+      "condition_expr": "fact.safe_reload_window == false AND threat.confidence > 0.55",
+      "blocks": [
+        "action.reload_weapon"
+      ],
+      "reason": "Перезарядка в открытую убивает правдоподобие и агента.",
+      "safer_alternatives": [
+        "method.reload.switch_or_hide_when_empty",
+        "method.survive.use_near_safe_cover",
+        "method.survive.break_los_lateral"
+      ]
+    },
+    "blocker.chase_without_fresh_info": {
+      "title": "Запрет преследования по старой/слабой информации",
+      "condition_expr": "threat.lkp_age_sec > 12 OR threat.confidence < 0.35",
+      "blocks": [
+        "action.pursue_toward_lkp",
+        "method.pursuit.cautious_cover_to_cover"
+      ],
+      "reason": "Преследование без свежей информации превращается в wallhack или самоубийный search rush.",
+      "safer_alternatives": [
+        "method.lost_contact.hold_lkp_angle",
+        "method.search.hold_and_scan_if_area_too_dangerous",
+        "method.objective.return_to_objective_alerted"
+      ]
+    },
+    "blocker.push_while_heavy_wounded": {
+      "title": "Запрет агрессивного пуша при тяжелом ранении",
+      "condition_expr": "agent.health_state in ['heavy_wounded','critical'] AND method.intent in ['pursue','flank','push']",
+      "blocks": [
+        "method.pursuit.cautious_cover_to_cover",
+        "method.combat.reposition_aggressive_angle"
+      ],
+      "reason": "Раненый агент должен хотеть жить. Активный пуш допустим только как крайний defensive escape.",
+      "safer_alternatives": [
+        "method.wounded.defensive_cover",
+        "method.fallback.break_contact",
+        "method.combat.hold_current_cover"
+      ]
+    },
+    "blocker.peek_into_active_killzone": {
+      "title": "Запрет длинного выглядывания в простреливаемую зону",
+      "condition_expr": "fact.safe_peek_window.allowed == false AND action.peek_duration_sec > fact.safe_peek_window.suggested_duration_sec",
+      "blocks": [
+        "action.peek_and_sample_los",
+        "action.fire_controlled_burst"
+      ],
+      "reason": "Подавленный/раненый агент не должен долго торчать из укрытия.",
+      "safer_alternatives": [
+        "method.combat.suppress_from_low_exposure",
+        "method.combat.reposition_short_safe",
+        "method.lost_contact.hold_lkp_angle"
+      ]
+    },
+    "blocker.cover_occupied_or_blocks_ally": {
+      "title": "Запрет укрытия, которое занято или ломает сквадовую геометрию",
+      "condition_expr": "candidate_cover.id in squad.occupied_cover_ids OR candidate_cover.blocks_ally_path_or_los == true",
+      "blocks": [
+        "action.reserve_cover",
+        "action.move_to_cover"
+      ],
+      "reason": "Без ролей все равно нужно избегать stacking/collisions и тупого забивания одной точки.",
+      "safer_alternatives": [
+        "method.position.select_alternate_cover",
+        "method.survive.local_profile_reduce"
+      ]
+    }
+  },
+  "compound_tasks": {
+    "task.root_survive_and_operate": {
+      "name": "Root: survive and operate",
+      "intent": "root",
+      "description": "Главная задача агента: сначала выжить, потом сохранить тактическую пользу и выполнить текущую objective.",
+      "methods": [
+        "method.root.critical_survival_first",
+        "method.root.handle_confirmed_contact",
+        "method.root.handle_lost_or_suspected_contact",
+        "method.root.manage_ammo_if_needed",
+        "method.root.continue_objective_alerted_or_idle"
+      ]
+    },
+    "task.survive_immediate_threat": {
+      "name": "Survive immediate threat",
+      "intent": "survive",
+      "description": "Спланировать способ снизить вероятность смерти в ближайшие 0.2-2 сек.",
+      "methods": [
+        "method.survive.use_near_safe_cover",
+        "method.survive.local_profile_reduce",
+        "method.survive.break_los_lateral",
+        "method.survive.suppress_then_move",
+        "method.survive.short_fallback"
+      ]
+    },
+    "task.select_survivable_position": {
+      "name": "Select survivable position",
+      "intent": "position",
+      "description": "Выбрать позицию, в которую реально можно попасть и которая улучшит выживание.",
+      "methods": [
+        "method.position.keep_current_if_good",
+        "method.position.select_nearest_safe_cover",
+        "method.position.select_better_cover",
+        "method.position.select_alternate_cover",
+        "method.position.no_cover_fallback_position"
+      ]
+    },
+    "task.handle_confirmed_contact": {
+      "name": "Handle confirmed contact",
+      "intent": "combat",
+      "description": "Построить план при подтвержденном контакте: цель видна или confidence достаточно высокий.",
+      "methods": [
+        "method.combat.direct_engage_from_cover",
+        "method.combat.exposed_snap_then_cover",
+        "method.combat.suppress_from_low_exposure",
+        "method.combat.reposition_short_safe",
+        "method.combat.fallback_when_outmatched"
+      ]
+    },
+    "task.handle_lost_contact": {
+      "name": "Handle lost contact",
+      "intent": "lost_contact",
+      "description": "План после потери LOS: не знать лишнего, использовать LKP, оценить поиск/удержание/возврат.",
+      "methods": [
+        "method.lost_contact.hold_lkp_angle",
+        "method.lost_contact.suppress_lkp_if_recent_and_ammo_ok",
+        "method.lost_contact.search_cover_to_cover",
+        "method.lost_contact.return_to_objective_when_stale"
+      ]
+    },
+    "task.investigate_stimulus": {
+      "name": "Investigate stimulus",
+      "intent": "investigate",
+      "description": "План осторожной проверки звука/подозрения без мгновенного знания цели.",
+      "methods": [
+        "method.investigate.observe_from_current_cover",
+        "method.investigate.move_to_safe_observation_point",
+        "method.investigate.ignore_low_value_noise",
+        "method.investigate.hold_if_noise_near_dangerous_corner"
+      ]
+    },
+    "task.manage_ammo": {
+      "name": "Manage ammo",
+      "intent": "ammo",
+      "description": "Решить, нужно ли перезаряжаться, переключаться, экономить или отступать.",
+      "methods": [
+        "method.reload.emergency_in_cover",
+        "method.reload.switch_or_hide_when_empty",
+        "method.reload.tactical_reload_before_next_phase",
+        "method.reload.defer_reload_continue_fight",
+        "method.reload.low_total_ammo_conserve"
+      ]
+    },
+    "task.pursue_or_hold": {
+      "name": "Pursue or hold",
+      "intent": "pursue_or_hold",
+      "description": "Планировать давление на LKP только если это не самоубийство и информация свежая.",
+      "methods": [
+        "method.pursuit.cautious_cover_to_cover",
+        "method.pursuit.hold_instead_of_chase",
+        "method.pursuit.abort_pursuit_due_to_risk"
+      ]
+    },
+    "task.wounded_behavior": {
+      "name": "Wounded behavior",
+      "intent": "wounded",
+      "description": "Спланировать поведение с учетом ранения и желания жить.",
+      "methods": [
+        "method.wounded.defensive_cover",
+        "method.wounded.break_contact",
+        "method.wounded.continue_limited_combat_if_safe"
+      ]
+    },
+    "task.share_squad_facts": {
+      "name": "Share squad facts silently",
+      "intent": "squad_awareness",
+      "description": "Обновить общие факты сквада без голосовых действий и без ролей.",
+      "methods": [
+        "method.squad.publish_contact_fact",
+        "method.squad.publish_cover_occupation",
+        "method.squad.noop_if_no_new_info"
+      ]
+    },
+    "task.reassess_after_action": {
+      "name": "Reassess after action",
+      "intent": "reassess",
+      "description": "Закрывающая задача: обновить память/риски и решить, нужен ли replan.",
+      "methods": [
+        "method.reassess.continue_plan_if_still_valid",
+        "method.reassess.trigger_replan_if_world_changed"
+      ]
+    },
+    "task.return_to_objective": {
+      "name": "Return to objective",
+      "intent": "objective",
+      "description": "Вернуться к задаче/позиции после устаревания контакта без полного сброса настороженности.",
+      "methods": [
+        "method.objective.return_to_objective_alerted",
+        "method.objective.hold_guard_position_alerted"
+      ]
+    }
+  },
+  "methods": {
+    "method.root.critical_survival_first": {
+      "task": "task.root_survive_and_operate",
+      "name": "Critical survival first",
+      "intent": "survive",
+      "description": "Если ближайший риск смерти высокий, сначала строим survival-план, а не combat/search.",
+      "preconditions": [
+        {
+          "expr": "fact.expected_death_risk > 0.55 OR fact.current_position_survivability < 0.35 OR fact.critical_threat >= 0.75",
+          "why": "Смертельная ситуация должна изменить план перед любыми другими целями."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "objective_delay",
+          "expr": "medium",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.survive_immediate_threat"
+        },
+        {
+          "type": "task",
+          "ref": "task.share_squad_facts",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "planner.focus",
+          "op": "set",
+          "value": "immediate_survival"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.root.handle_confirmed_contact": {
+      "task": "task.root_survive_and_operate",
+      "name": "Handle confirmed contact",
+      "intent": "combat",
+      "description": "Контакт подтвержден: планируем боевой обмен через укрытие/позицию/огонь.",
+      "preconditions": [
+        {
+          "expr": "threat.has_los == true OR threat.confidence >= 0.6",
+          "why": "Есть достаточно надежная угроза."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "agent.health_state == 'critical'",
+          "why": "Критический агент не должен входить в обычный combat plan."
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "threat_pressure",
+          "expr": "medium_to_high",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "position_gain",
+          "expr": "depends_on_cover",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "depends_on_method",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.handle_confirmed_contact"
+        },
+        {
+          "type": "task",
+          "ref": "task.manage_ammo",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.root.handle_lost_or_suspected_contact": {
+      "task": "task.root_survive_and_operate",
+      "name": "Handle lost or suspected contact",
+      "intent": "lost_or_suspicious",
+      "description": "Нет надежного LOS, но есть LKP/звук/сквадовая информация.",
+      "preconditions": [
+        {
+          "expr": "threat.has_los == false AND threat.confidence > 0.15",
+          "why": "Есть подозрение или память угрозы, но не прямой видимый враг."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "info_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "uncertainty",
+          "expr": "medium_to_high",
+          "sign": "uncertainty",
+          "weight_ref": "threat_uncertainty"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.handle_lost_contact"
+        },
+        {
+          "type": "task",
+          "ref": "task.investigate_stimulus",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.root.manage_ammo_if_needed": {
+      "task": "task.root_survive_and_operate",
+      "name": "Manage ammo if needed",
+      "intent": "ammo",
+      "description": "Боезапас может определять план даже без текущего выстрела.",
+      "preconditions": [
+        {
+          "expr": "fact.reload_need > 0.55 OR agent.weapon.ammo_in_mag == 0 OR agent.weapon.total_ammo < low_total_ammo_threshold",
+          "why": "Недостаток патронов влияет на ближайший план."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "medium_if_safe",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "reload_vulnerability",
+          "expr": "depends_on_window",
+          "sign": "risk",
+          "weight_ref": "reload_vulnerability"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.manage_ammo"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.root.continue_objective_alerted_or_idle": {
+      "task": "task.root_survive_and_operate",
+      "name": "Continue objective alerted or idle",
+      "intent": "objective",
+      "description": "Нет достаточной угрозы: агент продолжает задачу, но может оставаться настороженным.",
+      "preconditions": [
+        {
+          "expr": "threat.confidence <= 0.15 AND fact.expected_death_risk < 0.35",
+          "why": "Нет причины строить combat/survival план."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "objective_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "risk",
+          "expr": "low",
+          "sign": "risk",
+          "weight_ref": "expected_death_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.return_to_objective"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.survive.use_near_safe_cover": {
+      "task": "task.survive_immediate_threat",
+      "name": "Use near safe cover",
+      "intent": "survive",
+      "description": "Выбрать ближайшее укрытие, путь к которому не смертелен.",
+      "preconditions": [
+        {
+          "expr": "exists(candidate_cover where fact.cover_score > 0.55 AND fact.cover_route_risk < 0.45)",
+          "why": "Есть укрытие с приемлемой защитой и безопасным путем."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.suicidal_open_run"
+        },
+        {
+          "ref": "blocker.cover_occupied_or_blocks_ally"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "candidate_cover.protection",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "position_gain",
+          "expr": "candidate_cover.score",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "path.length",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "fact.cover_route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.select_survivable_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.reserve_cover"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_cover"
+        },
+        {
+          "type": "action",
+          "ref": "action.enter_cover_stance"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "agent.current_cover_id",
+          "op": "set",
+          "value": "selected_cover.id"
+        },
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "high"
+        }
+      ],
+      "failure_branches": [
+        {
+          "if": "selected_cover.invalidated OR new_fire_makes_route_risk > 0.78",
+          "then": "method.survive.local_profile_reduce"
+        }
+      ]
+    },
+    "method.survive.local_profile_reduce": {
+      "task": "task.survive_immediate_threat",
+      "name": "Local profile reduce",
+      "intent": "survive",
+      "description": "Если безопасного cover-пути нет, сначала снизить профиль и локальную смертность вместо бега в открытую.",
+      "preconditions": [
+        {
+          "expr": "no safe cover route OR fact.cover_route_risk >= 0.45",
+          "why": "Укрытие может быть далеко или путь слишком опасен."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "low",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        },
+        {
+          "name": "info_gain",
+          "expr": "low",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "reduced_but_not_zero",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.drop_or_crouch"
+        },
+        {
+          "type": "action",
+          "ref": "action.micro_move_out_of_line"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_impact_or_threat_direction"
+        },
+        {
+          "type": "task",
+          "ref": "task.select_survivable_position",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "medium"
+        },
+        {
+          "path": "threat.direction_quality",
+          "op": "increase",
+          "value": "small_if_impacts_found"
+        }
+      ],
+      "failure_branches": [],
+      "planner_notes": "Это fallback вместо абстрактного 'идти в укрытие'. HTN может после этого построить новый план, если появилась безопасная промежуточная точка."
+    },
+    "method.survive.break_los_lateral": {
+      "task": "task.survive_immediate_threat",
+      "name": "Break LOS lateral",
+      "intent": "survive",
+      "description": "Короткое боковое смещение/отход, чтобы разорвать текущую линию огня без длинной перебежки.",
+      "preconditions": [
+        {
+          "expr": "fact.los_quality > 0.25 OR fact.reappearance_risk > 0.45",
+          "why": "Есть текущая/вероятная линия огня, которую можно сломать коротким движением."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "fact.expected_death_risk_of_lateral_move > 0.82",
+          "why": "Даже короткое смещение слишком опасно."
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "break_los_amount",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "short_distance",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "lateral_route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_lateral_break_los_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_short_lateral"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "threat.has_los",
+          "op": "likely_set",
+          "value": false
+        },
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "medium"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.survive.suppress_then_move": {
+      "task": "task.survive_immediate_threat",
+      "name": "Suppress then move",
+      "intent": "survive",
+      "description": "Если движение опасно, но нужно сменить позицию, сначала создать короткое давление по сектору/LKP, затем двигаться.",
+      "preconditions": [
+        {
+          "expr": "agent.weapon.ammo_in_mag >= minimum_burst_ammo AND threat.confidence >= 0.45 AND fact.cover_route_risk between 0.45 and 0.70",
+          "why": "Есть патроны и примерное направление угрозы, движение рискованно, но не полностью запрещено."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "agent.health_state in ['heavy_wounded','critical']",
+          "why": "Раненый агент не должен усложнять survival-план агрессивным suppression-move без крайней нужды."
+        },
+        {
+          "ref": "blocker.suicidal_open_run"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "movement_after_pressure",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "ammo_cost",
+          "expr": "burst_cost",
+          "sign": "cost",
+          "weight_ref": "ammo_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "reduced_route_risk_after_suppression",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.fire_short_suppression_at_lkp_or_sector"
+        },
+        {
+          "type": "task",
+          "ref": "task.select_survivable_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_cover"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.survive.short_fallback": {
+      "task": "task.survive_immediate_threat",
+      "name": "Short fallback",
+      "intent": "survive",
+      "description": "Отойти назад/в сторону к более безопасной зоне, если впереди/к игроку идти опасно.",
+      "preconditions": [
+        {
+          "expr": "fallback_route_risk < forward_route_risk AND objective.importance < 0.9",
+          "why": "Отход безопаснее, чем движение вперед; objective не запрещает короткий отход."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "high_if_breaks_contact",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "objective_loss",
+          "expr": "objective.importance",
+          "sign": "cost",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "fallback_distance",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_fallback_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_fallback_point"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "high"
+        },
+        {
+          "path": "objective.local_hold_quality",
+          "op": "decrease",
+          "value": "depends_on_distance"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.position.keep_current_if_good": {
+      "task": "task.select_survivable_position",
+      "name": "Keep current position if good",
+      "intent": "position",
+      "description": "Не менять укрытие ради смены укрытия, если текущая позиция уже достаточно хороша.",
+      "preconditions": [
+        {
+          "expr": "fact.current_position_survivability > 0.65 AND current_cover_quality > 0.6",
+          "why": "Текущее укрытие/позиция работает."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "already_high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "zero",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "hysteresis_bonus",
+          "expr": "avoid_jitter",
+          "sign": "utility"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.keep_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.update_cover_reservation"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.position.select_nearest_safe_cover": {
+      "task": "task.select_survivable_position",
+      "name": "Select nearest safe cover",
+      "intent": "position",
+      "description": "Выбрать ближайшее укрытие с хорошим route safety.",
+      "preconditions": [
+        {
+          "expr": "exists(candidate_cover where cover_route_risk < 0.45)",
+          "why": "Есть безопасная по пути точка."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.cover_occupied_or_blocks_ally"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "position_gain",
+          "expr": "cover_score",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "path.length",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "cover_route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.evaluate_cover_candidates"
+        },
+        {
+          "type": "action",
+          "ref": "action.select_cover_by_score"
+        },
+        {
+          "type": "action",
+          "ref": "action.reserve_cover"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.position.select_better_cover": {
+      "task": "task.select_survivable_position",
+      "name": "Select better cover",
+      "intent": "position",
+      "description": "Сменить укрытие только если выгода существенно выше и покрывает риск пути.",
+      "preconditions": [
+        {
+          "expr": "best_cover.score > current_cover.score + cover_switch_threshold",
+          "why": "Новое укрытие заметно лучше текущего."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.suicidal_open_run"
+        },
+        {
+          "ref": "blocker.cover_occupied_or_blocks_ally"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "position_gain",
+          "expr": "best-current",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "path.length",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        },
+        {
+          "name": "hysteresis",
+          "expr": "switch_threshold",
+          "sign": "utility"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.evaluate_cover_candidates"
+        },
+        {
+          "type": "action",
+          "ref": "action.select_cover_by_score"
+        },
+        {
+          "type": "action",
+          "ref": "action.reserve_cover"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.position.select_alternate_cover": {
+      "task": "task.select_survivable_position",
+      "name": "Select alternate cover",
+      "intent": "position",
+      "description": "Если лучший cover занят/ломает сквадовую геометрию, выбрать следующий приемлемый.",
+      "preconditions": [
+        {
+          "expr": "best_cover.blocked_by_occupancy == true AND exists(alternate_cover)",
+          "why": "Лучший кандидат нельзя использовать."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "position_gain",
+          "expr": "alternate_cover.score",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "squad_coherence_gain",
+          "expr": "avoid_stacking",
+          "sign": "utility",
+          "weight_ref": "squad_coherence_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.evaluate_cover_candidates"
+        },
+        {
+          "type": "action",
+          "ref": "action.select_alternate_cover"
+        },
+        {
+          "type": "action",
+          "ref": "action.reserve_cover"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.position.no_cover_fallback_position": {
+      "task": "task.select_survivable_position",
+      "name": "No cover fallback position",
+      "intent": "position",
+      "description": "Если настоящих укрытий нет, выбрать ближайшую точку, которая хотя бы снижает LOS/exposure.",
+      "preconditions": [
+        {
+          "expr": "no valid cover candidates",
+          "why": "Нет полноценного cover point."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "small_to_medium",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "position_gain",
+          "expr": "break_los_or_reduce_angle",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "short",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_low_exposure_micro_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_short_lateral"
+        },
+        {
+          "type": "action",
+          "ref": "action.enter_low_profile_stance"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.combat.direct_engage_from_cover": {
+      "task": "task.handle_confirmed_contact",
+      "name": "Direct engage from cover",
+      "intent": "engage",
+      "description": "Стрелять коротким циклом из текущего/выбранного укрытия, если peek безопасен.",
+      "preconditions": [
+        {
+          "expr": "current_cover_quality > 0.45 AND fact.safe_peek_window.allowed == true AND agent.weapon.ammo_in_mag > 0",
+          "why": "Можно вести бой из укрытия короткими окнами."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.peek_into_active_killzone"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "threat_pressure",
+          "expr": "visible_or_lkp_quality",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "info_gain",
+          "expr": "peek_sample",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "peek_duration * threat_confidence",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        },
+        {
+          "name": "ammo_cost",
+          "expr": "burst_cost",
+          "sign": "cost",
+          "weight_ref": "ammo_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.peek_and_sample_los"
+        },
+        {
+          "type": "action",
+          "ref": "action.fire_controlled_burst"
+        },
+        {
+          "type": "action",
+          "ref": "action.hide_back_to_cover"
+        },
+        {
+          "type": "task",
+          "ref": "task.manage_ammo",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "threat.confidence",
+          "op": "increase_if_los",
+          "value": "medium"
+        },
+        {
+          "path": "agent.suppression",
+          "op": "decrease_if_not_under_fire",
+          "value": "small"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.combat.exposed_snap_then_cover": {
+      "task": "task.handle_confirmed_contact",
+      "name": "Exposed snap then cover",
+      "intent": "engage_survive",
+      "description": "Если агент открыт и цель видна, не стоять стрелять: коротко ответить/сбить темп и строить cover-план.",
+      "preconditions": [
+        {
+          "expr": "current_cover_quality < 0.35 AND threat.has_los == true AND agent.weapon.ammo_in_mag > 0",
+          "why": "Агент открыт при видимом противнике."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "fact.expected_death_risk_of_snap_fire > 0.82",
+          "why": "Даже короткая остановка слишком опасна."
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "followup_cover_plan",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "short_snap",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "snap_duration",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.fire_short_defensive_burst"
+        },
+        {
+          "type": "task",
+          "ref": "task.survive_immediate_threat"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": [],
+      "planner_notes": "Это не поведение 'стоять и стрелять', а метод для выигрыша долей секунды перед survival-планом."
+    },
+    "method.combat.suppress_from_low_exposure": {
+      "task": "task.handle_confirmed_contact",
+      "name": "Suppress from low exposure",
+      "intent": "suppress",
+      "description": "Подавить сектор/LKP, если точного shot нет, но есть примерное знание и низкое окно exposure.",
+      "preconditions": [
+        {
+          "expr": "threat.confidence >= 0.45 AND agent.weapon.ammo_in_mag >= suppression_min_ammo AND low_exposure_fire_position_available",
+          "why": "Есть смысл давить область без точного LOS."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "agent.weapon.total_ammo < low_total_ammo_threshold",
+          "why": "Нельзя тратить последние патроны на подавление без нужды."
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "threat_pressure",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "survival_gain",
+          "expr": "prevents_enemy_free_peek",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "ammo_cost",
+          "expr": "medium_high",
+          "sign": "cost",
+          "weight_ref": "ammo_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "low_if_blind_or_low_peek",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.fire_short_suppression_at_lkp_or_sector"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.combat.reposition_short_safe": {
+      "task": "task.handle_confirmed_contact",
+      "name": "Reposition short safe",
+      "intent": "reposition",
+      "description": "Сменить точку/угол на коротком безопасном маршруте, если текущая позиция скомпрометирована.",
+      "preconditions": [
+        {
+          "expr": "current_cover_compromised == true OR no_fire_window_from_current_cover == true",
+          "why": "Текущая позиция больше не дает защиты или пользы."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.suicidal_open_run"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "position_gain",
+          "expr": "new_angle_or_protection",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "survival_gain",
+          "expr": "better_cover",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "short_path",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.select_survivable_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_cover"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.combat.fallback_when_outmatched": {
+      "task": "task.handle_confirmed_contact",
+      "name": "Fallback when outmatched",
+      "intent": "fallback",
+      "description": "Отступить или разорвать контакт, если текущий бой невыгоден.",
+      "preconditions": [
+        {
+          "expr": "agent.health_state in ['light_wounded','heavy_wounded'] OR agent.suppression > 0.7 OR fact.expected_death_risk > 0.65 OR ammo_low == true",
+          "why": "Бой стал слишком опасным."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "objective_loss",
+          "expr": "objective.importance",
+          "sign": "cost",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "low",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.wounded_behavior",
+          "optional": true
+        },
+        {
+          "type": "action",
+          "ref": "action.select_fallback_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_fallback_point"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.lost_contact.hold_lkp_angle": {
+      "task": "task.handle_lost_contact",
+      "name": "Hold LKP angle",
+      "intent": "hold_sector",
+      "description": "Держать последнюю известную позицию/опасный сектор, если прямой пуш слишком рискован или LKP свежая.",
+      "preconditions": [
+        {
+          "expr": "threat.has_los == false AND threat.confidence >= 0.35 AND threat.lkp_age_sec <= 18",
+          "why": "Есть свежая или средняя по качеству LKP."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "area_control",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "info_gain",
+          "expr": "wait_for_enemy_reappearance",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "hold_duration",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.orient_to_lkp_or_emergence_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.hold_sector"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "task",
+          "ref": "task.pursue_or_hold",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "threat.confidence",
+          "op": "decay",
+          "value": "by_time"
+        },
+        {
+          "path": "agent.exposure",
+          "op": "maintain_or_reduce",
+          "value": "depends_on_cover"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.lost_contact.suppress_lkp_if_recent_and_ammo_ok": {
+      "task": "task.handle_lost_contact",
+      "name": "Suppress LKP if recent and ammo OK",
+      "intent": "suppress_lkp",
+      "description": "Коротко подавить LKP/точки восстановления LOS, если информация свежая и патронов достаточно.",
+      "preconditions": [
+        {
+          "expr": "threat.lkp_age_sec <= 6 AND threat.confidence >= 0.55 AND agent.weapon.ammo_in_mag >= suppression_min_ammo",
+          "why": "LKP свежая, suppression имеет смысл."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "expr": "agent.weapon.total_ammo < low_total_ammo_threshold",
+          "why": "Экономить патроны при low total ammo."
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "threat_pressure",
+          "expr": "medium_high",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "ammo_cost",
+          "expr": "medium",
+          "sign": "cost",
+          "weight_ref": "ammo_cost"
+        },
+        {
+          "name": "info_gain",
+          "expr": "low",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "depends_on_fire_position",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.fire_short_suppression_at_lkp_or_sector"
+        },
+        {
+          "type": "action",
+          "ref": "action.hide_back_to_cover"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.lost_contact.search_cover_to_cover": {
+      "task": "task.handle_lost_contact",
+      "name": "Search cover-to-cover",
+      "intent": "search",
+      "description": "Проверять область LKP через безопасные observation points, а не бежать к ней напрямую.",
+      "preconditions": [
+        {
+          "expr": "fact.search_area_score > 0.45 AND fact.pursuit_viability > 0.45",
+          "why": "Есть смысл и возможность осторожного продвижения."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.chase_without_fresh_info"
+        },
+        {
+          "ref": "blocker.suicidal_open_run"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "info_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "position_gain",
+          "expr": "toward_search_area",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "cover_to_cover_steps",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        },
+        {
+          "name": "uncertainty",
+          "expr": "lkp_age",
+          "sign": "uncertainty",
+          "weight_ref": "stale_lkp_penalty"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_next_observation_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_cover_to_cover_step"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.lost_contact.return_to_objective_when_stale": {
+      "task": "task.handle_lost_contact",
+      "name": "Return to objective when stale",
+      "intent": "objective",
+      "description": "Если LKP устарела, не искать бесконечно и не делать wallhack-погоню.",
+      "preconditions": [
+        {
+          "expr": "threat.lkp_age_sec > 18 OR threat.confidence < 0.25",
+          "why": "Информация уже слабая."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "objective_gain",
+          "expr": "medium_high",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "uncertainty_penalty",
+          "expr": "avoid_bad_search",
+          "sign": "uncertainty",
+          "weight_ref": "threat_uncertainty"
+        },
+        {
+          "name": "risk",
+          "expr": "low",
+          "sign": "risk",
+          "weight_ref": "expected_death_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.return_to_objective"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.investigate.observe_from_current_cover": {
+      "task": "task.investigate_stimulus",
+      "name": "Observe from current cover",
+      "intent": "investigate",
+      "description": "Если уже есть безопасная позиция, сначала наблюдать, а не двигаться к шуму.",
+      "preconditions": [
+        {
+          "expr": "current_cover_quality > 0.45 AND stimulus.threat_level <= 0.65",
+          "why": "Подозрение есть, но нет срочной угрозы."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "info_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "survival_gain",
+          "expr": "maintain_cover",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "short_observation",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.orient_to_stimulus"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "action",
+          "ref": "action.wait_and_listen"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.investigate.move_to_safe_observation_point": {
+      "task": "task.investigate_stimulus",
+      "name": "Move to safe observation point",
+      "intent": "investigate",
+      "description": "Двигаться не к источнику шума, а к точке наблюдения, откуда можно безопасно проверить область.",
+      "preconditions": [
+        {
+          "expr": "exists(observation_point where route_risk < 0.45 AND info_gain > 0.4)",
+          "why": "Есть безопасная точка наблюдения."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.suicidal_open_run"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "info_gain",
+          "expr": "observation_point.info_gain",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "path.length",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_next_observation_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_cover_to_cover_step"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.investigate.ignore_low_value_noise": {
+      "task": "task.investigate_stimulus",
+      "name": "Ignore low value noise",
+      "intent": "investigate",
+      "description": "Слабый/старый стимул может не стоить риска или нарушения objective.",
+      "preconditions": [
+        {
+          "expr": "stimulus.threat_level < 0.25 AND objective.importance > 0.5",
+          "why": "Шум слабый, задача важнее."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "objective_gain",
+          "expr": "maintain_task",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "info_loss",
+          "expr": "low",
+          "sign": "cost",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "risk",
+          "expr": "low",
+          "sign": "risk",
+          "weight_ref": "expected_death_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.keep_position"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.investigate.hold_if_noise_near_dangerous_corner": {
+      "task": "task.investigate_stimulus",
+      "name": "Hold if noise near dangerous corner",
+      "intent": "hold_sector",
+      "description": "Если шум рядом с углом/дверью и идти туда опасно, держать сектор вместо проверки ногами.",
+      "preconditions": [
+        {
+          "expr": "stimulus.near_corner_or_door == true AND fact.reappearance_risk > 0.45",
+          "why": "Угол/дверь может быстро восстановить LOS угрозы."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "info_gain",
+          "expr": "wait_for_reveal",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "hold_duration",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.orient_to_stimulus"
+        },
+        {
+          "type": "action",
+          "ref": "action.hold_sector"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reload.emergency_in_cover": {
+      "task": "task.manage_ammo",
+      "name": "Emergency reload in cover",
+      "intent": "reload",
+      "description": "Пустой магазин: перезаряжаться только если есть cover/разорван LOS.",
+      "preconditions": [
+        {
+          "expr": "agent.weapon.ammo_in_mag == 0 AND fact.safe_reload_window.allowed == true",
+          "why": "Патронов в магазине нет, окно безопасно."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.exposed_reload_vs_confirmed_threat"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "restores_weapon",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "reload_vulnerability",
+          "expr": "duration * reappearance_risk",
+          "sign": "risk",
+          "weight_ref": "reload_vulnerability"
+        },
+        {
+          "name": "time_cost",
+          "expr": "reload_duration",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.reload_weapon"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [
+        {
+          "path": "agent.weapon.ammo_in_mag",
+          "op": "set",
+          "value": "mag_capacity_or_remaining_ammo"
+        }
+      ],
+      "failure_branches": []
+    },
+    "method.reload.switch_or_hide_when_empty": {
+      "task": "task.manage_ammo",
+      "name": "Switch or hide when empty",
+      "intent": "reload",
+      "description": "Если магазин пуст, но перезарядка небезопасна, сначала восстановить безопасность или сменить оружие.",
+      "preconditions": [
+        {
+          "expr": "agent.weapon.ammo_in_mag == 0 AND fact.safe_reload_window.allowed == false",
+          "why": "Пусто, но перезаряжаться нельзя."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "hide_or_sidearm",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "switch_or_move",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "depends_on_move",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.switch_to_secondary_if_available",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.survive_immediate_threat"
+        },
+        {
+          "type": "action",
+          "ref": "action.reload_weapon",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reload.tactical_reload_before_next_phase": {
+      "task": "task.manage_ammo",
+      "name": "Tactical reload before next phase",
+      "intent": "reload",
+      "description": "Перезарядиться заранее, если ожидается следующий контакт и есть безопасное окно.",
+      "preconditions": [
+        {
+          "expr": "fact.reload_need > 0.55 AND fact.safe_reload_window.allowed == true AND agent.weapon.ammo_in_mag > 0",
+          "why": "Магазин не пуст, но патронов может не хватить на следующий контакт."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.exposed_reload_vs_confirmed_threat"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "future_firepower",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "reload_duration",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        },
+        {
+          "name": "reload_vulnerability",
+          "expr": "window_risk",
+          "sign": "risk",
+          "weight_ref": "reload_vulnerability"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.reload_weapon"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reload.defer_reload_continue_fight": {
+      "task": "task.manage_ammo",
+      "name": "Defer reload and continue fight",
+      "intent": "ammo",
+      "description": "Не перезаряжаться заранее, если враг виден/рядом или окно небезопасно.",
+      "preconditions": [
+        {
+          "expr": "fact.safe_reload_window.allowed == false AND agent.weapon.ammo_in_mag > 0",
+          "why": "Есть патроны, но reload сейчас слишком опасен."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "avoid_reload_death",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "ammo_risk",
+          "expr": "low_mag",
+          "sign": "risk",
+          "weight_ref": "ammo_cost"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "can_still_fire",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.handle_confirmed_contact",
+          "optional": true
+        },
+        {
+          "type": "task",
+          "ref": "task.survive_immediate_threat",
+          "optional": true
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reload.low_total_ammo_conserve": {
+      "task": "task.manage_ammo",
+      "name": "Low total ammo conserve",
+      "intent": "ammo",
+      "description": "Если общий запас низкий, уменьшить suppressive fire и избегать долгого преследования.",
+      "preconditions": [
+        {
+          "expr": "agent.weapon.total_ammo < low_total_ammo_threshold",
+          "why": "Общий боезапас низкий."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "ammo_for_emergency",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "reduced",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "objective_gain",
+          "expr": "depends",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.set_fire_mode_conserve_ammo"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.pursuit.cautious_cover_to_cover": {
+      "task": "task.pursue_or_hold",
+      "name": "Cautious cover-to-cover pursuit",
+      "intent": "pursue",
+      "description": "Продвигаться к LKP только по коротким безопасным шагам и с переоценкой после каждого шага.",
+      "preconditions": [
+        {
+          "expr": "fact.pursuit_viability > 0.6 AND threat.lkp_age_sec <= 6 AND agent.weapon.ammo_in_mag >= expected_min_ammo_for_contact",
+          "why": "Информация свежая, патронов достаточно, маршрут приемлем."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.chase_without_fresh_info"
+        },
+        {
+          "ref": "blocker.suicidal_open_run"
+        },
+        {
+          "ref": "blocker.push_while_heavy_wounded"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "info_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "position_gain",
+          "expr": "toward_lkp",
+          "sign": "utility",
+          "weight_ref": "position_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "step_path",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "step_route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        },
+        {
+          "name": "objective_loss",
+          "expr": "objective.importance",
+          "sign": "cost",
+          "weight_ref": "objective_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_next_observation_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_cover_to_cover_step"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": [],
+      "planner_notes": "В HTN это план на один безопасный step + replan, а не полный blind chase до игрока."
+    },
+    "method.pursuit.hold_instead_of_chase": {
+      "task": "task.pursue_or_hold",
+      "name": "Hold instead of chase",
+      "intent": "hold_sector",
+      "description": "Если погоня имеет плохой expected utility, удерживать сектор/LKP.",
+      "preconditions": [
+        {
+          "expr": "fact.pursuit_viability <= 0.6 OR objective.importance > 0.7",
+          "why": "Погоня невыгодна или objective важнее."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "objective_gain",
+          "expr": "medium_high",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "info_gain",
+          "expr": "medium_if_reappearance",
+          "sign": "utility",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "hold_duration",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.orient_to_lkp_or_emergence_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.hold_sector"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.pursuit.abort_pursuit_due_to_risk": {
+      "task": "task.pursue_or_hold",
+      "name": "Abort pursuit due to risk",
+      "intent": "abort_pursuit",
+      "description": "Явно отказаться от преследования, если оно стало самоубийственным/устаревшим.",
+      "preconditions": [
+        {
+          "expr": "fact.cover_route_risk > 0.75 OR threat.lkp_age_sec > 12 OR agent.suppression > 0.7 OR agent.health_state in ['heavy_wounded','critical']",
+          "why": "Погоня противоречит самосохранению."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "info_loss",
+          "expr": "medium",
+          "sign": "cost",
+          "weight_ref": "info_gain"
+        },
+        {
+          "name": "objective_gain",
+          "expr": "return_or_hold",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.handle_lost_contact"
+        },
+        {
+          "type": "task",
+          "ref": "task.return_to_objective",
+          "optional": true
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.wounded.defensive_cover": {
+      "task": "task.wounded_behavior",
+      "name": "Wounded defensive cover",
+      "intent": "wounded_survive",
+      "description": "Раненый агент приоритетно выбирает укрытие/низкий профиль и только оборонительную стрельбу.",
+      "preconditions": [
+        {
+          "expr": "agent.health_state in ['light_wounded','heavy_wounded','critical']",
+          "why": "Ранение должно менять поведение."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.suicidal_open_run"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "threat_pressure",
+          "expr": "low_to_medium",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "health_modified",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "task",
+          "ref": "task.survive_immediate_threat"
+        },
+        {
+          "type": "action",
+          "ref": "action.set_combat_style_defensive"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.wounded.break_contact": {
+      "task": "task.wounded_behavior",
+      "name": "Wounded break contact",
+      "intent": "fallback",
+      "description": "Тяжело раненый агент пытается разорвать контакт вместо продолжения атаки.",
+      "preconditions": [
+        {
+          "expr": "agent.health_state in ['heavy_wounded','critical'] AND fallback_route_risk < hold_position_death_risk",
+          "why": "Выжить можно только через отход/разрыв LOS."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "very_high",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "objective_loss",
+          "expr": "depends",
+          "sign": "cost",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "health_modified",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_fallback_point"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_to_fallback_point"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.wounded.continue_limited_combat_if_safe": {
+      "task": "task.wounded_behavior",
+      "name": "Continue limited combat if safe",
+      "intent": "wounded_combat",
+      "description": "Легко раненый может продолжать бой, но с более коротким peek и меньшей агрессией.",
+      "preconditions": [
+        {
+          "expr": "agent.health_state == 'light_wounded' AND current_cover_quality > 0.55 AND fact.safe_peek_window.allowed == true",
+          "why": "Есть безопасное укрытие, ранение не критическое."
+        }
+      ],
+      "hard_blockers": [
+        {
+          "ref": "blocker.peek_into_active_killzone"
+        }
+      ],
+      "score_terms": [
+        {
+          "name": "threat_pressure",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "threat_pressure"
+        },
+        {
+          "name": "survival_gain",
+          "expr": "cover_maintained",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "shorter_peek",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.set_peek_duration_modifier_wounded"
+        },
+        {
+          "type": "action",
+          "ref": "action.peek_and_sample_los"
+        },
+        {
+          "type": "action",
+          "ref": "action.fire_controlled_burst"
+        },
+        {
+          "type": "action",
+          "ref": "action.hide_back_to_cover"
+        },
+        {
+          "type": "task",
+          "ref": "task.reassess_after_action"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.squad.publish_contact_fact": {
+      "task": "task.share_squad_facts",
+      "name": "Publish contact fact",
+      "intent": "squad_awareness",
+      "description": "Записать в shared squad memory факт контакта/LKP без voice action.",
+      "preconditions": [
+        {
+          "expr": "new_or_updated_threat_fact == true",
+          "why": "Есть новая информация для сквада."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "squad_coherence_gain",
+          "expr": "medium",
+          "sign": "utility",
+          "weight_ref": "squad_coherence_gain"
+        },
+        {
+          "name": "time_cost",
+          "expr": "negligible",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.publish_squad_fact"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.squad.publish_cover_occupation": {
+      "task": "task.share_squad_facts",
+      "name": "Publish cover occupation",
+      "intent": "squad_awareness",
+      "description": "Обновить занятые/зарезервированные укрытия сквада.",
+      "preconditions": [
+        {
+          "expr": "agent.current_cover_id != null OR selected_cover != null",
+          "why": "Есть cover occupancy/reservation для синхронизации."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "squad_coherence_gain",
+          "expr": "avoid_stacking",
+          "sign": "utility",
+          "weight_ref": "squad_coherence_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.update_cover_reservation"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.squad.noop_if_no_new_info": {
+      "task": "task.share_squad_facts",
+      "name": "Noop if no new info",
+      "intent": "squad_awareness",
+      "description": "Не делать ничего, если нет новой общей информации.",
+      "preconditions": [
+        {
+          "expr": "new_or_updated_threat_fact == false",
+          "why": "Нет смысла дергать shared state."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "time_cost",
+          "expr": "zero",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.noop"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reassess.continue_plan_if_still_valid": {
+      "task": "task.reassess_after_action",
+      "name": "Continue plan if still valid",
+      "intent": "reassess",
+      "description": "Не перепланировать, если мир существенно не изменился и hysteresis защищает текущий план.",
+      "preconditions": [
+        {
+          "expr": "no_replan_trigger == true AND new_best_plan_score < current_plan_score + hysteresis_delta",
+          "why": "Нет сильной причины переключаться."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "plan_stability",
+          "expr": "high",
+          "sign": "utility"
+        },
+        {
+          "name": "time_cost",
+          "expr": "low",
+          "sign": "cost",
+          "weight_ref": "time_cost"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.continue_current_plan"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.reassess.trigger_replan_if_world_changed": {
+      "task": "task.reassess_after_action",
+      "name": "Trigger replan if world changed",
+      "intent": "reassess",
+      "description": "HTN перепланируется при существенном изменении фактов, а не каждый кадр как BT.",
+      "preconditions": [
+        {
+          "expr": "replan_trigger == true",
+          "why": "Новая информация делает текущий plan invalid или сильно хуже."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "survival_gain",
+          "expr": "avoid_invalid_plan",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        },
+        {
+          "name": "plan_complexity",
+          "expr": "small",
+          "sign": "cost",
+          "weight_ref": "plan_complexity"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.request_replan"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.objective.return_to_objective_alerted": {
+      "task": "task.return_to_objective",
+      "name": "Return to objective alerted",
+      "intent": "objective",
+      "description": "Вернуться к задаче, сохраняя повышенную тревогу после старой угрозы.",
+      "preconditions": [
+        {
+          "expr": "objective.type != 'none' AND threat.confidence < 0.35",
+          "why": "Угроза слаба, задача снова важна."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "objective_gain",
+          "expr": "high",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "movement_cost",
+          "expr": "path_to_objective",
+          "sign": "cost",
+          "weight_ref": "movement_cost"
+        },
+        {
+          "name": "exposure_risk",
+          "expr": "objective_route_risk",
+          "sign": "risk",
+          "weight_ref": "exposure_risk"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.select_objective_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.move_cover_to_cover_step",
+          "optional": true
+        },
+        {
+          "type": "action",
+          "ref": "action.keep_position"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    },
+    "method.objective.hold_guard_position_alerted": {
+      "task": "task.return_to_objective",
+      "name": "Hold guard position alerted",
+      "intent": "objective",
+      "description": "Оставаться на текущей guard-позиции, если движение к objective не нужно или рискованно.",
+      "preconditions": [
+        {
+          "expr": "objective.type in ['guard_area','hold_position']",
+          "why": "Текущая позиция может быть частью задачи."
+        }
+      ],
+      "hard_blockers": [],
+      "score_terms": [
+        {
+          "name": "objective_gain",
+          "expr": "medium_high",
+          "sign": "utility",
+          "weight_ref": "objective_gain"
+        },
+        {
+          "name": "survival_gain",
+          "expr": "depends_on_cover",
+          "sign": "utility",
+          "weight_ref": "survival_gain"
+        }
+      ],
+      "decomposition": [
+        {
+          "type": "action",
+          "ref": "action.keep_position"
+        },
+        {
+          "type": "action",
+          "ref": "action.scan_arc"
+        }
+      ],
+      "projected_effects": [],
+      "failure_branches": []
+    }
+  },
+  "primitive_actions": {
+    "action.evaluate_cover_candidates": {
+      "name": "Evaluate cover candidates",
+      "category": "query",
+      "description": "Посчитать CoverScore/RouteRisk для cover candidates.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "ai_query_budget",
+        "plan_complexity": "medium"
+      },
+      "effects": [
+        {
+          "path": "planning.candidate_covers",
+          "op": "set",
+          "value": "scored_cover_list"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Не исполняет движение. Это query/action leaf для планировщика или сервисный primitive.",
+        "CoverScore должен учитывать route risk, occupancy, firing window and objective."
+      ],
+      "outputs": [
+        "selected candidate list with cover_score, route_risk, path, fire_window, occupancy"
+      ]
+    },
+    "action.select_cover_by_score": {
+      "name": "Select cover by score",
+      "category": "query",
+      "description": "Выбрать cover candidate с лучшим expected score после hard blockers.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.selected_cover",
+          "op": "set",
+          "value": "best_valid_cover"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.select_alternate_cover": {
+      "name": "Select alternate cover",
+      "category": "query",
+      "description": "Выбрать следующий приемлемый cover, если лучший занят/опасен.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.selected_cover",
+          "op": "set",
+          "value": "alternate_valid_cover"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.reserve_cover": {
+      "name": "Reserve cover",
+      "category": "squad_awareness",
+      "description": "Зарезервировать выбранное укрытие в shared occupancy.",
+      "duration": "instant_or_async",
+      "preconditions": [
+        "planning.selected_cover != null"
+      ],
+      "cost": {
+        "squad_dependency": "low"
+      },
+      "effects": [
+        {
+          "path": "squad.occupied_cover_ids",
+          "op": "add",
+          "value": "selected_cover.id"
+        }
+      ],
+      "fail_conditions": [
+        "selected_cover already reserved by another agent with higher priority",
+        "cover invalidated by new threat direction"
+      ]
+    },
+    "action.update_cover_reservation": {
+      "name": "Update cover reservation",
+      "category": "squad_awareness",
+      "description": "Обновить/освободить текущую reservation.",
+      "duration": "instant_or_async",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "squad.occupied_cover_ids",
+          "op": "update",
+          "value": "agent.current_cover_id"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.move_to_cover": {
+      "name": "Move to cover",
+      "category": "movement",
+      "description": "Движение к выбранному укрытию по рассчитанному route.",
+      "duration": "path.length / speed_modified_by_health",
+      "preconditions": [
+        "planning.selected_cover != null",
+        "fact.cover_route_risk <= allowed_route_risk_for_context"
+      ],
+      "cost": {
+        "movement_cost": "path.length",
+        "time_cost": "duration",
+        "exposure_risk": "fact.cover_route_risk",
+        "expected_death_risk": "fact.expected_death_risk"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "set",
+          "value": "selected_cover.position"
+        },
+        {
+          "path": "agent.current_cover_id",
+          "op": "set",
+          "value": "selected_cover.id"
+        },
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "depends_on_cover"
+        }
+      ],
+      "fail_conditions": [
+        "route becomes blocked",
+        "new incoming fire raises route risk above hardblock",
+        "cover destroyed/occupied/invalid"
+      ],
+      "technical_notes": [
+        "Route should be sampled for exposure, not evaluated only by endpoint.",
+        "For long routes prefer decomposing into move_cover_to_cover_step."
+      ]
+    },
+    "action.enter_cover_stance": {
+      "name": "Enter cover stance",
+      "category": "stance",
+      "description": "Принять stance для выбранного укрытия: crouch/lean/prone/low ready.",
+      "duration": "0.1-0.6 sec",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "low"
+      },
+      "effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "low_to_medium"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.drop_or_crouch": {
+      "name": "Drop or crouch",
+      "category": "stance",
+      "description": "Мгновенно снизить профиль, если бежать опасно.",
+      "duration": "0.1-0.4 sec",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "very_low",
+        "position_gain": "low",
+        "survival_gain": "medium"
+      },
+      "effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "medium"
+        },
+        {
+          "path": "agent.mobility",
+          "op": "temporary_decrease",
+          "value": "stance_dependent"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.micro_move_out_of_line": {
+      "name": "Micro move out of line",
+      "category": "movement",
+      "description": "Короткое локальное смещение с минимальным route risk.",
+      "duration": "0.2-1.0 sec",
+      "preconditions": [],
+      "cost": {
+        "movement_cost": "very_low",
+        "exposure_risk": "local_exposure_risk"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "offset",
+          "value": "small_lateral_or_backward"
+        },
+        {
+          "path": "fact.los_quality",
+          "op": "likely_decrease",
+          "value": "small_to_medium"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Использовать локальный sampling: 4-12 nearby offsets, выбрать с минимальным expected death risk."
+      ]
+    },
+    "action.scan_impact_or_threat_direction": {
+      "name": "Scan impact/threat direction",
+      "category": "perception",
+      "description": "Обновить примерное направление угрозы по impacts, recent damage, tracers, звуку, squad facts.",
+      "duration": "0.2-1.0 sec",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "low",
+        "info_gain": "medium"
+      },
+      "effects": [
+        {
+          "path": "threat.direction",
+          "op": "update",
+          "value": "estimated_direction"
+        },
+        {
+          "path": "threat.confidence",
+          "op": "update",
+          "value": "based_on_evidence"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.select_lateral_break_los_point": {
+      "name": "Select lateral break LOS point",
+      "category": "query",
+      "description": "Найти близкую точку, где LOS/reappearance risk меньше.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.lateral_point",
+          "op": "set",
+          "value": "best_local_los_break_point"
+        }
+      ],
+      "fail_conditions": [],
+      "outputs": [
+        "lateral_point",
+        "expected_los_after_move",
+        "local_route_risk"
+      ]
+    },
+    "action.move_short_lateral": {
+      "name": "Move short lateral",
+      "category": "movement",
+      "description": "Коротко сместиться в сторону/назад, чтобы сломать LOS или угол.",
+      "duration": "0.2-1.2 sec",
+      "preconditions": [
+        "planning.lateral_point != null OR local_offset_available"
+      ],
+      "cost": {
+        "movement_cost": "short_distance",
+        "exposure_risk": "local_route_risk",
+        "time_cost": "duration"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "set_or_offset",
+          "value": "lateral_point"
+        },
+        {
+          "path": "fact.los_quality",
+          "op": "likely_decrease",
+          "value": "medium"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.select_fallback_point": {
+      "name": "Select fallback point",
+      "category": "query",
+      "description": "Выбрать точку короткого отхода с меньшей смертностью и приемлемой потерей objective.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.fallback_point",
+          "op": "set",
+          "value": "best_fallback_point"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.move_to_fallback_point": {
+      "name": "Move to fallback point",
+      "category": "movement",
+      "description": "Отойти к выбранной fallback-точке.",
+      "duration": "path.length / speed_modified_by_health",
+      "preconditions": [
+        "planning.fallback_point != null"
+      ],
+      "cost": {
+        "movement_cost": "path.length",
+        "exposure_risk": "fallback_route_risk",
+        "objective_loss": "distance_from_objective * importance"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "set",
+          "value": "fallback_point"
+        },
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "depends"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.peek_and_sample_los": {
+      "name": "Peek and sample LOS",
+      "category": "combat_perception",
+      "description": "Коротко выглянуть из укрытия и обновить LOS/ThreatConfidence.",
+      "duration": "fact.safe_peek_window.suggested_duration_sec",
+      "preconditions": [
+        "current_cover_quality > 0.35",
+        "fact.safe_peek_window.allowed == true"
+      ],
+      "cost": {
+        "exposure_risk": "peek_duration * threat_confidence * threat_lethality",
+        "info_gain": "visible_samples"
+      },
+      "effects": [
+        {
+          "path": "fact.los_quality",
+          "op": "update",
+          "value": "trace_result"
+        },
+        {
+          "path": "threat.confidence",
+          "op": "update",
+          "value": "trace_result_and_memory"
+        }
+      ],
+      "fail_conditions": [
+        "incoming fire spike",
+        "agent hit",
+        "peek edge suppressed"
+      ],
+      "technical_notes": [
+        "Peek duration should be calculated, not fixed. Suppression/wounds reduce duration."
+      ]
+    },
+    "action.fire_controlled_burst": {
+      "name": "Fire controlled burst",
+      "category": "combat",
+      "description": "Сделать короткую очередь по видимой цели или LKP с текущим accuracy model.",
+      "duration": "0.2-1.2 sec",
+      "preconditions": [
+        "agent.weapon.ammo_in_mag > 0",
+        "weapon_ready == true"
+      ],
+      "cost": {
+        "ammo_cost": "2-6 rounds modified by stress",
+        "exposure_risk": "if fired from peek",
+        "time_cost": "burst_duration"
+      },
+      "effects": [
+        {
+          "path": "agent.weapon.ammo_in_mag",
+          "op": "decrease",
+          "value": "burst_rounds"
+        },
+        {
+          "path": "threat_pressure",
+          "op": "increase",
+          "value": "medium_to_high"
+        }
+      ],
+      "fail_conditions": [
+        "mag empty mid-burst",
+        "target not visible and no valid lkp sector"
+      ],
+      "technical_notes": [
+        "Accuracy should degrade with suppression, wounds, movement, low confidence and blind fire."
+      ]
+    },
+    "action.fire_short_defensive_burst": {
+      "name": "Fire short defensive burst",
+      "category": "combat",
+      "description": "Очень короткая оборонительная очередь для выигрыша времени перед уходом в укрытие.",
+      "duration": "0.15-0.6 sec",
+      "preconditions": [
+        "agent.weapon.ammo_in_mag > 0"
+      ],
+      "cost": {
+        "ammo_cost": "1-4",
+        "exposure_risk": "short_but_high_if_exposed"
+      },
+      "effects": [
+        {
+          "path": "threat_pressure",
+          "op": "increase",
+          "value": "small_to_medium"
+        },
+        {
+          "path": "agent.weapon.ammo_in_mag",
+          "op": "decrease",
+          "value": "rounds"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.fire_short_suppression_at_lkp_or_sector": {
+      "name": "Fire short suppression at LKP/sector",
+      "category": "combat",
+      "description": "Коротко подавить LKP или опасный сектор без необходимости точного знания.",
+      "duration": "0.4-2.0 sec",
+      "preconditions": [
+        "agent.weapon.ammo_in_mag >= suppression_min_ammo",
+        "threat.confidence >= 0.35"
+      ],
+      "cost": {
+        "ammo_cost": "medium",
+        "exposure_risk": "depends_on_firing_position",
+        "time_cost": "duration"
+      },
+      "effects": [
+        {
+          "path": "threat_pressure",
+          "op": "increase",
+          "value": "medium"
+        },
+        {
+          "path": "agent.weapon.ammo_in_mag",
+          "op": "decrease",
+          "value": "suppression_rounds"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Suppression target should be LKP, emergence points, doorway/corner sector, impact-derived sector. Not exact player position unless seen."
+      ]
+    },
+    "action.hide_back_to_cover": {
+      "name": "Hide back to cover",
+      "category": "stance",
+      "description": "Вернуться в безопасную часть укрытия после peek/fire.",
+      "duration": "0.1-0.5 sec",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "high"
+        },
+        {
+          "path": "fact.los_quality",
+          "op": "set",
+          "value": "0_or_reduced"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.orient_to_lkp_or_emergence_point": {
+      "name": "Orient to LKP/emergence",
+      "category": "orientation",
+      "description": "Повернуться к LKP или самому опасному emergence point.",
+      "duration": "turn_time",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "turn_time"
+      },
+      "effects": [
+        {
+          "path": "agent.focus_direction",
+          "op": "set",
+          "value": "best_lkp_or_emergence_direction"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.orient_to_stimulus": {
+      "name": "Orient to stimulus",
+      "category": "orientation",
+      "description": "Повернуться в сторону звука/стимула без знания точной цели.",
+      "duration": "turn_time",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "turn_time"
+      },
+      "effects": [
+        {
+          "path": "agent.focus_direction",
+          "op": "set",
+          "value": "stimulus.direction"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.hold_sector": {
+      "name": "Hold sector",
+      "category": "combat_perception",
+      "description": "Удерживать сектор оружием/вниманием без продвижения.",
+      "duration": "configurable 1-8 sec with jitter",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "hold_duration",
+        "info_gain": "reappearance_probability",
+        "exposure_risk": "low_if_in_cover"
+      },
+      "effects": [
+        {
+          "path": "area_control",
+          "op": "increase",
+          "value": "sector"
+        },
+        {
+          "path": "threat.confidence",
+          "op": "decay",
+          "value": "time"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.scan_arc": {
+      "name": "Scan arc",
+      "category": "perception",
+      "description": "Проверить сектор через traces/perception samples.",
+      "duration": "0.5-3.0 sec",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "scan_duration",
+        "info_gain": "arc_coverage"
+      },
+      "effects": [
+        {
+          "path": "threat.memory",
+          "op": "update",
+          "value": "scan_results"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.wait_and_listen": {
+      "name": "Wait and listen",
+      "category": "perception",
+      "description": "Короткое ожидание для повторного стимула без движения в опасную зону.",
+      "duration": "0.5-3.0 sec",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "wait_duration",
+        "info_gain": "new_stimulus_chance"
+      },
+      "effects": [
+        {
+          "path": "threat.memory",
+          "op": "update",
+          "value": "if_new_sound"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.select_next_observation_point": {
+      "name": "Select next observation point",
+      "category": "query",
+      "description": "Выбрать следующую точку, откуда безопаснее получить информацию о LKP/search area.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.observation_point",
+          "op": "set",
+          "value": "best_valid_observation_point"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Observation point is not necessarily closer to enemy; it maximizes info_gain - exposure risk."
+      ]
+    },
+    "action.move_cover_to_cover_step": {
+      "name": "Move cover-to-cover step",
+      "category": "movement",
+      "description": "Один короткий шаг между укрытиями/observation points с последующим replan.",
+      "duration": "step_path.length / speed_modified_by_health",
+      "preconditions": [
+        "planning.observation_point != null OR planning.selected_cover != null",
+        "step_route_risk <= allowed_step_risk"
+      ],
+      "cost": {
+        "movement_cost": "step_length",
+        "exposure_risk": "step_route_risk",
+        "time_cost": "duration"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "set",
+          "value": "step_destination"
+        },
+        {
+          "path": "threat.memory",
+          "op": "may_update",
+          "value": "new_perception_after_step"
+        }
+      ],
+      "fail_conditions": [
+        "new LOS from threat during step",
+        "route risk spikes",
+        "destination occupied"
+      ],
+      "technical_notes": [
+        "HTN plans one/few steps, not full rush. After step, re-evaluate."
+      ]
+    },
+    "action.pursue_toward_lkp": {
+      "name": "Pursue toward LKP",
+      "category": "movement",
+      "description": "Продвижение к LKP; должно использоваться только как part of cover-to-cover method.",
+      "duration": "variable",
+      "preconditions": [
+        "fact.pursuit_viability > threshold"
+      ],
+      "cost": {
+        "movement_cost": "path_length",
+        "exposure_risk": "path_risk",
+        "uncertainty": "lkp_age"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "move_toward",
+          "value": "threat.last_known_position"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Prefer action.move_cover_to_cover_step. Direct pursue is often hard-blocked."
+      ]
+    },
+    "action.reload_weapon": {
+      "name": "Reload weapon",
+      "category": "weapon",
+      "description": "Перезарядить оружие.",
+      "duration": "weapon.reload_duration * health_modifier",
+      "preconditions": [
+        "agent.weapon.total_ammo > 0",
+        "fact.safe_reload_window.allowed == true"
+      ],
+      "cost": {
+        "time_cost": "reload_duration",
+        "reload_vulnerability": "duration * reappearance_risk",
+        "threat_pressure": "zero_while_reloading"
+      },
+      "effects": [
+        {
+          "path": "agent.weapon.ammo_in_mag",
+          "op": "set",
+          "value": "min(mag_capacity,total_ammo)"
+        },
+        {
+          "path": "agent.weapon.total_ammo",
+          "op": "decrease",
+          "value": "loaded_rounds"
+        }
+      ],
+      "fail_conditions": [
+        "new close threat",
+        "incoming fire breaks safe window",
+        "agent interrupted/hit"
+      ]
+    },
+    "action.switch_to_secondary_if_available": {
+      "name": "Switch to secondary if available",
+      "category": "weapon",
+      "description": "Сменить оружие, если primary empty and threat close/unsafe reload.",
+      "duration": "switch_duration",
+      "preconditions": [
+        "secondary_available == true"
+      ],
+      "cost": {
+        "time_cost": "switch_duration"
+      },
+      "effects": [
+        {
+          "path": "agent.weapon.current",
+          "op": "set",
+          "value": "secondary"
+        },
+        {
+          "path": "agent.weapon.ready",
+          "op": "set",
+          "value": true
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.set_fire_mode_conserve_ammo": {
+      "name": "Set fire mode conserve ammo",
+      "category": "weapon_policy",
+      "description": "Уменьшить suppressive fire и burst cost при low total ammo.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "agent.weapon.policy",
+          "op": "set",
+          "value": "conserve_ammo"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.set_combat_style_defensive": {
+      "name": "Set combat style defensive",
+      "category": "policy",
+      "description": "Снизить агрессию, pursuit/flank viability и peek duration после ранения.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "agent.policy.aggression_modifier",
+          "op": "decrease",
+          "value": "wounded"
+        },
+        {
+          "path": "agent.policy.peek_duration_modifier",
+          "op": "decrease",
+          "value": "wounded"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.set_peek_duration_modifier_wounded": {
+      "name": "Set wounded peek modifier",
+      "category": "policy",
+      "description": "Сделать peek короче для легко раненого агента.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "agent.policy.peek_duration_modifier",
+          "op": "decrease",
+          "value": "light_wounded"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.publish_squad_fact": {
+      "name": "Publish squad fact",
+      "category": "squad_awareness",
+      "description": "Записать shared LKP/видимость/угрозу/состояние без голосового действия.",
+      "duration": "instant_or_async",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "negligible"
+      },
+      "effects": [
+        {
+          "path": "squad.shared_lkp",
+          "op": "update",
+          "value": "if_contact_fact"
+        },
+        {
+          "path": "squad.shared_lkp_confidence",
+          "op": "update",
+          "value": "decayed_confidence"
+        }
+      ],
+      "fail_conditions": [],
+      "technical_notes": [
+        "Это не 'сказать вслух'. Это shared fact/state replication внутри squad awareness."
+      ]
+    },
+    "action.select_low_exposure_micro_position": {
+      "name": "Select low exposure micro position",
+      "category": "query",
+      "description": "Выбрать маленькое локальное смещение, уменьшающее exposure, когда нет cover.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.lateral_point",
+          "op": "set",
+          "value": "low_exposure_local_point"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.enter_low_profile_stance": {
+      "name": "Enter low profile stance",
+      "category": "stance",
+      "description": "Принять prone/crouch/low profile в fallback position.",
+      "duration": "0.1-0.5 sec",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "agent.exposure",
+          "op": "decrease",
+          "value": "medium"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.select_objective_position": {
+      "name": "Select objective position",
+      "category": "objective_query",
+      "description": "Выбрать позицию внутри objective с учетом актуальной тревоги и укрытий.",
+      "duration": "query_only",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planning.objective_position",
+          "op": "set",
+          "value": "best_objective_position"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.keep_position": {
+      "name": "Keep position",
+      "category": "stance",
+      "description": "Остаться на месте; используется как сознательный low-cost план, а не бездействие.",
+      "duration": "variable",
+      "preconditions": [],
+      "cost": {
+        "time_cost": "duration",
+        "exposure_risk": "current_position_exposure"
+      },
+      "effects": [
+        {
+          "path": "agent.position",
+          "op": "maintain",
+          "value": "current"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.continue_current_plan": {
+      "name": "Continue current plan",
+      "category": "planner",
+      "description": "Продолжать текущий HTN plan, если он не стал invalid.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planner.current_plan",
+          "op": "maintain",
+          "value": "current"
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.request_replan": {
+      "name": "Request replan",
+      "category": "planner",
+      "description": "Запросить новый HTN decomposition из root или ближайшего invalidated task.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [
+        {
+          "path": "planner.replan_requested",
+          "op": "set",
+          "value": true
+        }
+      ],
+      "fail_conditions": []
+    },
+    "action.noop": {
+      "name": "No operation",
+      "category": "noop",
+      "description": "Ничего не делать; валидный leaf, когда метод нужен для явного отсутствия действия.",
+      "duration": "instant",
+      "preconditions": [],
+      "cost": {},
+      "effects": [],
+      "fail_conditions": []
+    }
+  },
+  "replan_triggers": [
+    {
+      "id": "trigger.new_confirmed_los",
+      "condition": "threat.has_los changed false->true OR fact.los_quality increased above 0.5",
+      "reason": "Появился подтвержденный контакт; текущий search/idle план может быть хуже combat/survival."
+    },
+    {
+      "id": "trigger.lost_los",
+      "condition": "threat.has_los changed true->false",
+      "reason": "Переход от direct engagement к LKP/hold/search."
+    },
+    {
+      "id": "trigger.damage_taken",
+      "condition": "threat.damage_recent == true OR agent.health_state changed",
+      "reason": "Ранение меняет cost/utility и может hard-block-ить push."
+    },
+    {
+      "id": "trigger.near_miss_or_incoming_fire",
+      "condition": "threat.near_miss_recent == true OR threat.incoming_fire increased by > 0.25",
+      "reason": "Нужно пересчитать suppression, route risk and survival."
+    },
+    {
+      "id": "trigger.cover_invalidated",
+      "condition": "current_cover_compromised == true OR selected_cover.invalidated == true",
+      "reason": "План укрытия/стрельбы потерял основу."
+    },
+    {
+      "id": "trigger.mag_empty",
+      "condition": "agent.weapon.ammo_in_mag == 0",
+      "reason": "Ammo management может стать главным task."
+    },
+    {
+      "id": "trigger.route_risk_spike",
+      "condition": "current_plan.next_movement.route_risk > hardblock threshold",
+      "reason": "Не продолжать ранее выбранное движение через новую опасность."
+    },
+    {
+      "id": "trigger.lkp_stale",
+      "condition": "threat.lkp_age_sec crossed stale threshold",
+      "reason": "Search/pursuit больше не должны использовать старую LKP как свежую."
+    },
+    {
+      "id": "trigger.squad_fact_changed",
+      "condition": "squad.shared_lkp updated OR ally_has_los changed",
+      "reason": "Сквадовые данные могут сделать другой план выгоднее, но не дают магический LOS."
+    }
+  ],
+  "scenario_tests": {
+    "scenario.exposed_enemy_visible": {
+      "name": "Враг виден, агент открыт",
+      "initial_state": {
+        "threat.has_los": true,
+        "threat.confidence": 0.95,
+        "current_cover_quality": 0.1,
+        "agent.weapon.ammo_in_mag": 12,
+        "fact.expected_death_risk": 0.7
+      },
+      "expected_rejected_methods_or_actions": [
+        "standing_long_fire",
+        "tactical_reload",
+        "direct_pursuit"
+      ],
+      "expected_good_methods": [
+        "method.combat.exposed_snap_then_cover",
+        "method.survive.use_near_safe_cover",
+        "method.survive.local_profile_reduce"
+      ],
+      "notes": "План не должен быть 'стоять и стрелять'. Даже если цель видна, survival step должен войти в decomposition."
+    },
+    "scenario.need_cover_but_far_open": {
+      "name": "Нужно укрытие, но хорошее укрытие далеко через открытую зону",
+      "initial_state": {
+        "best_cover.score": 0.9,
+        "fact.cover_route_risk": 0.88,
+        "threat.incoming_fire": 0.7,
+        "no_intermediate_cover": true
+      },
+      "expected_rejected_methods_or_actions": [
+        "action.move_to_cover",
+        "method.pursuit.cautious_cover_to_cover"
+      ],
+      "expected_good_methods": [
+        "method.survive.local_profile_reduce",
+        "method.survive.break_los_lateral",
+        "method.survive.suppress_then_move"
+      ],
+      "notes": "Проверяет ключевой тезис: endpoint good не равен plan good."
+    },
+    "scenario.lost_los_fresh_lkp": {
+      "name": "Потеряли LOS, LKP свежая",
+      "initial_state": {
+        "threat.has_los": false,
+        "threat.lkp_age_sec": 2,
+        "threat.confidence": 0.75,
+        "agent.weapon.ammo_in_mag": 20,
+        "current_cover_quality": 0.65
+      },
+      "expected_rejected_methods_or_actions": [
+        "know_exact_new_player_position",
+        "rush_to_lkp_without_route_eval"
+      ],
+      "expected_good_methods": [
+        "method.lost_contact.hold_lkp_angle",
+        "method.lost_contact.suppress_lkp_if_recent_and_ammo_ok",
+        "method.lost_contact.search_cover_to_cover"
+      ],
+      "notes": "ИИ помнит LKP, но не получает новую позицию игрока без perception data."
+    },
+    "scenario.near_miss_unknown_direction": {
+      "name": "Near miss, направление неясно",
+      "initial_state": {
+        "threat.near_miss_recent": true,
+        "threat.incoming_fire": 0.65,
+        "threat.direction_quality": 0.2,
+        "threat.confidence": 0.35,
+        "current_cover_quality": 0.2
+      },
+      "expected_rejected_methods_or_actions": [
+        "perfect_return_fire",
+        "direct_chase_to_shooter"
+      ],
+      "expected_good_methods": [
+        "method.survive.local_profile_reduce",
+        "action.scan_impact_or_threat_direction",
+        "method.survive.use_near_safe_cover"
+      ],
+      "notes": "Near miss повышает страх/suppression, но не должен давать точный aim target."
+    },
+    "scenario.empty_mag_visible_threat": {
+      "name": "Пустой магазин и угроза рядом/видна",
+      "initial_state": {
+        "agent.weapon.ammo_in_mag": 0,
+        "fact.safe_reload_window.allowed": false,
+        "threat.confidence": 0.9,
+        "threat.distance_m": 8
+      },
+      "expected_rejected_methods_or_actions": [
+        "action.reload_weapon"
+      ],
+      "expected_good_methods": [
+        "method.reload.switch_or_hide_when_empty",
+        "method.survive_immediate_threat"
+      ],
+      "notes": "Проверяет запрет reload в открытую."
+    },
+    "scenario_heavy_wounded_contact": {
+      "name": "Тяжело раненый при контакте",
+      "initial_state": {
+        "agent.health_state": "heavy_wounded",
+        "threat.confidence": 0.8,
+        "agent.suppression": 0.5,
+        "fallback_route_risk": 0.35
+      },
+      "expected_rejected_methods_or_actions": [
+        "method.pursuit.cautious_cover_to_cover",
+        "method.combat.reposition_aggressive_angle"
+      ],
+      "expected_good_methods": [
+        "method.wounded.defensive_cover",
+        "method.wounded.break_contact",
+        "method.combat.fallback_when_outmatched"
+      ],
+      "notes": "Ранение должно менять available methods, а не только accuracy."
+    }
+  },
+  "implementation_notes": {
+    "expressions": "expr-поля здесь строковые. Для HTML visualizer их можно показывать как текст. Для runtime можно позже заменить на DSL/AST/blackboard evaluators.",
+    "costs": "Большая часть cost terms здесь символическая: high/medium/expr. Для движка их нужно связать с нормализованными 0..1 метриками.",
+    "htn_not_bt": [
+      "Не исполнять методы сверху вниз как selector каждый tick.",
+      "Сначала построить candidate plans через decomposition.",
+      "Затем оценить full/partial projected plan с учетом будущих effects и рисков.",
+      "Replan только по triggers или invalidation, плюс hysteresis от дергания."
+    ],
+    "what_to_visualize_first": [
+      "task.root_survive_and_operate",
+      "task.survive_immediate_threat",
+      "task.handle_confirmed_contact",
+      "task.handle_lost_contact",
+      "fact.cover_route_risk",
+      "fact.reappearance_risk",
+      "global_hard_blockers"
+    ]
+  }
+}

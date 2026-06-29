@@ -1,0 +1,12 @@
+.agents/
+.codex/
+.vite/
+dist/
+site/dist/
+node_modules/
+site/node_modules/
+*.log
+*.err.log
+*.out.log
+Thumbs.db
+.DS_Store

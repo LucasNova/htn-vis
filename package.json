@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix site run dev",
+    "dev:server": "npm --prefix site run dev:server",
+    "build": "npm --prefix site run build",
+    "preview": "npm --prefix site run preview"
+  }
+}

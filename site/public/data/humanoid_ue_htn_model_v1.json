@@ -1,0 +1,5254 @@
+{
+  "schema_version": "ue_htn_humanoid_behavior_v2",
+  "language": "en",
+  "purpose": "UE HTN модель поведения вооруженных гуманоидов: HTN assets, ноды, decorators, services, Blackboard keys, стоимость, replan hooks и проверочные use cases.",
+  "root_asset": "HTN.Humanoid.Root",
+  "design_intent": [
+    "Агент должен беречь жизнь в летальной тактической игре.",
+    "Поведение должно работать против любой враждебной цели, а не только против игрока.",
+    "Агент реагирует на видимость цели, звуки, попадания, near miss, потерю контакта, боезапас, ранения и факты сквада.",
+    "Отдельные голосовые callout-действия не моделируются; обмен фактами сквада считается тихим общим состоянием.",
+    "Командирские роли не моделируются; все агенты используют одну логику с локальными и squad facts.",
+    "В игре нет prone/lie-down; выживание использует укрытия, стойку и короткое боковое смещение.",
+    "Если угроза, вероятно, не знает об агенте или скваде, агент может сблизиться к выгодной позиции вместо раннего дальнего огня.",
+    "Боевой HTN является прерыванием поверх обычных задач: patrol, guard, hold и move-to-interest.",
+    "Изменение позиции угрозы вызывает replan только после значимого смещения, смены LOS bucket или минимального интервала.",
+    "Звук выстрела, место попадания, near miss и реакция союзника хранятся отдельно, потому что дают разную уверенность и разные search anchors.",
+    "Decorators задают условия планирования и перепроверки. Опциональные действия должны оформляться через Prefer/Success или SubPlan, чтобы их отказ не ломал внешний план.",
+    "Огонь во вторичной ветке Parallel является опциональным, кроме специальных suppress-then-move веток.",
+    "В бою с подтвержденной целью hard decorators отсекают невозможные варианты, а стоимость выбирает лучший допустимый план.",
+    "Survival имеет жесткий приоритет только при высоком краткосрочном риске смерти. Ранения меняют пороги и стоимость, но не должны навсегда удерживать survival после стабилизации.",
+    "Пустой магазин должен уводить план в ammo recovery, укрытие или survival, а не в перемещение между огневыми углами без рабочего оружия."
+  ],
+  "ue_htn_contract": {
+    "planner_goal": "UE HTN строит допустимые планы и выбирает валидный план с минимальной суммарной положительной стоимостью.",
+    "cost_rule": "Стоимость всегда положительная. Выгода выражается снижением лишних затрат или штрафами за риск; отдельный utility_score не нужен.",
+    "worldstate_rule": "Планирование работает с копиями Blackboard-derived worldstate. Tasks и decorators читают/пишут ключи при построении плана; execution переносит нужные результаты обратно в Blackboard.",
+    "conditions_rule": "Условия планирования задаются decorators или CreatePlanSteps. Инвалидация выполнения задается Plan Recheck/Tick/Event decorators, ReceiveRecheckPlan или services, которые вызывают Replan.",
+    "structural_nodes": [
+      "Prefer",
+      "If",
+      "Optional",
+      "Parallel",
+      "AnyOrder",
+      "Sequence",
+      "Scope",
+      "SubNetwork",
+      "SubPlan"
+    ],
+    "docs": [
+      "https://maksmaisak.github.io/htn/docs.html#/planning",
+      "https://maksmaisak.github.io/htn/docs.html#/task",
+      "https://maksmaisak.github.io/htn/docs.html#/decorator",
+      "https://maksmaisak.github.io/htn/docs.html#/service",
+      "https://maksmaisak.github.io/htn/docs.html#/prefer",
+      "https://maksmaisak.github.io/htn/docs.html#/parallel",
+      "https://maksmaisak.github.io/htn/docs.html#/subplan"
+    ],
+    "custom_structural_nodes": [
+      {
+        "ue_class": "UTAHTNNode_CostChoice",
+        "purpose": "Кастомная compound HTN node для выбора по стоимости там, где HTNNode_Prefer слишком жестко задает порядок. Нода строит кандидаты веток, отбрасывает заблокированные decorators/tasks варианты и выбирает минимальную суммарную стоимость.",
+        "default_alternative": "Если нода не реализована, разделить кандидаты на отдельные HTN assets и явно принять priority-поведение HTNNode_Prefer."
+      }
+    ]
+  },
+  "cost_model": {
+    "unit": "абстрактная положительная стоимость плана",
+    "formula_hint": "task_base + path_cost + exposure_penalty + death_risk_penalty + ammo_penalty + time_penalty + uncertainty_penalty + coordination_penalty + premature_reveal_penalty + distance_mismatch_penalty + wrong_gait_penalty",
+    "weights": {
+      "path_cost_per_meter": 1,
+      "time_cost_per_second": 4,
+      "exposure_penalty": 80,
+      "expected_death_risk_penalty": 180,
+      "incoming_fire_penalty": 70,
+      "grenade_risk_penalty": 140,
+      "ammo_spend_penalty": 12,
+      "ammo_depletion_risk_penalty": 55,
+      "reload_vulnerability_penalty": 90,
+      "premature_reveal_penalty": 95,
+      "distance_mismatch_penalty": 35,
+      "wrong_gait_penalty": 75,
+      "sprint_fire_blocker_penalty": 999,
+      "threat_uncertainty_penalty": 35,
+      "wounded_mobility_penalty": 45,
+      "squad_spacing_penalty": 15
+    },
+    "hard_invalid_thresholds": {
+      "max_expected_death_risk_for_open_move": 0.62,
+      "max_cover_route_risk_without_suppression": 0.68,
+      "max_reload_exposure_risk": 0.35,
+      "max_lkp_age_for_pursuit_sec": 12,
+      "min_threat_confidence_for_direct_engage": 0.58,
+      "close_threat_distance_m": 12,
+      "long_contact_distance_m": 35,
+      "max_threat_awareness_for_stalk": 0.35,
+      "min_seconds_to_empty_for_reload_prep": 2.5
+    },
+    "selection_policy": "Hard decorators и CreatePlanSteps отсекают невозможные варианты. Среди допустимых вариантов выбирается минимальная суммарная стоимость. Prefer используется для приоритетного запасной вариант, а не для сравнения выгоды.",
+    "candidate_cost_terms": [
+      "path_cost",
+      "exposure_penalty",
+      "expected_death_risk_penalty",
+      "ammo_depletion_risk_penalty",
+      "reload_vulnerability_penalty",
+      "premature_reveal_penalty",
+      "distance_mismatch_penalty",
+      "threat_uncertainty_penalty",
+      "squad_spacing_penalty"
+    ]
+  },
+  "worldstate_keys": {
+    "SelfLocation": {
+      "type": "Vector",
+      "source": "HTN built-in Blackboard key",
+      "description": "Автоматический Blackboard key HTN: текущая позиция управляемого pawn. Используется для планирования дистанций, маршрутов и проверки укрытий."
+    },
+    "Objective.CurrentKind": {
+      "type": "Enum",
+      "values": [
+        "PatrolRoute",
+        "GuardArea",
+        "MoveToInterestPoint",
+        "HoldPosition",
+        "None"
+      ],
+      "description": "Текущая небоевая назначенная задача агента или сквада. По ней root выбирает patrol, guard, move-to-interest или удержание позиции.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Objective.TargetLocation": {
+      "type": "Vector",
+      "description": "Целевая точка текущей назначенной задачи: patrol waypoint, точка интереса, guard focus или временная позиция удержания.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Objective.PatrolRoute": {
+      "type": "Object",
+      "description": "Данные или handle маршрута патруля. Используется только когда Objective.CurrentKind указывает на patrol.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Objective.GuardArea": {
+      "type": "Object",
+      "description": "Область, volume или anchor для поведения охраны. Guard subnetwork выбирает внутри нее полезный пост и сектор наблюдения.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Objective.InterestPoint": {
+      "type": "Object",
+      "description": "Точка интереса для обычной назначенной задачи вне подтвержденного боя.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Objective.Priority": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Насколько важно сохранять текущую небоевую задача-задачу, когда нет срочного тактическое прерывание.",
+      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+    },
+    "Combat.ThreatActor": {
+      "type": "Actor",
+      "description": "Актер текущей подтвержденной угрозы, если он видим или недавно подтвержден damage/near miss/squad fact.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.ThreatLocation": {
+      "type": "Vector",
+      "description": "Лучшая известная позиция угрозы. Может быть точной visual position или last known position.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ThreatLocation"
+      ]
+    },
+    "Combat.ThreatLocationMoveDelta": {
+      "type": "Float",
+      "description": "Насколько принятая ThreatLocation сместилась с последнего тактического sample. Защищает planner от replan на каждое микро-движение.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.ThreatLocationReplanThreshold": {
+      "type": "Float",
+      "description": "Минимальное значимое смещение ThreatLocation в метрах, после которого можно просить replan.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.ThreatLocationReplanMinIntervalSec": {
+      "type": "Float",
+      "description": "Минимальный интервал между replans по изменению ThreatLocation, чтобы движущаяся цель не вызывала planning thrash.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.ThreatConfidence": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Уверенность агента, что Combat.ThreatLocation тактически полезна и по ней можно строить бой или поиск.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ThreatConfidence"
+      ]
+    },
+    "Combat.LKPAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с последнего обновления Combat.ThreatLocation.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "LKPAgeSec"
+      ]
+    },
+    "Combat.LOSQuality": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Качество line of sight по нескольким visibility samples, не только по origin актера.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "LOSQuality"
+      ]
+    },
+    "Combat.IncomingFire": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Давление входящего огня: попадания, near miss, трассеры, импакты, suppression или надежные squad cues.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "IncomingFire"
+      ]
+    },
+    "Combat.ExpectedDeathRisk": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Оценка риска умереть в коротком горизонте для текущей позиции или планируемого route.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ExpectedDeathRisk"
+      ]
+    },
+    "Combat.CurrentPositionSurvivability": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Живучесть текущей позиции против известных или вероятных направлений угрозы.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "CoverQuality"
+      ]
+    },
+    "Combat.CoverRouteRisk": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Интегральный риск маршрута к выбранному укрытию: exposure, lethal peaks и открытые промежутки, а не только безопасность конечной точки.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "CoverRouteRisk"
+      ]
+    },
+    "Combat.ReappearanceRisk": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Риск, что угроза быстро появится из угла, двери, высоты или фланга пока агент выполняет действие.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.DistanceToThreat": {
+      "type": "Float",
+      "description": "Дистанция в метрах до подтвержденной угрозы или лучшей известной ThreatLocation.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "DistanceToThreat"
+      ]
+    },
+    "Combat.ThreatAwarenessOfAgent": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Оценка вероятности, что угроза знает про этого агента или позицию его сквада.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ThreatAwareOfAgent"
+      ]
+    },
+    "Combat.ThreatFacingAgent": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Насколько view/aim cone угрозы покрывает агента или сектор его сквада.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ThreatFacingAgent"
+      ]
+    },
+    "Combat.SelectedCover": {
+      "type": "Object",
+      "description": "Выбранный cover кандидат после EQS/custom cover query. Это канонический ключ вместо отдельных SafeCoverКандидат alias.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "SafeCoverCandidate"
+      ]
+    },
+    "Combat.SelectedCoverLocation": {
+      "type": "Vector",
+      "description": "Move target для Combat.SelectedCover.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.ReservedCoverId": {
+      "type": "Name",
+      "description": "Токен резервации укрытия, чтобы участники сквада не занимали один и тот же слот.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.PeekLocation": {
+      "type": "Vector",
+      "description": "Временная точка короткой экспозиции, откуда агент может проверить LOS или сделать короткий выстрел.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.SearchAnchor": {
+      "type": "Vector",
+      "description": "Опорная точка поиска после потери контакта: LKP, weapon report origin, impact/near-miss sector или ally-hit reaction.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "SearchAnchor"
+      ]
+    },
+    "Combat.PreferredAttackPosition": {
+      "type": "Vector",
+      "description": "Выбранная прикрытая позиция для stalk/ambush или более безопасного угла атаки.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "CoveredAttackPosition"
+      ]
+    },
+    "Combat.ApproachRouteRisk": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Exposure, noise и reveal risk на маршруте скрытого сближения перед первым выстрелом.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ApproachRouteRisk"
+      ]
+    },
+    "Combat.StimulusLocation": {
+      "type": "Vector",
+      "description": "Обобщенная позиция стимула после выбора между weapon report, impact, near miss и ally-hit reaction.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "StimulusLocation"
+      ]
+    },
+    "Combat.StimulusAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с момента выбранного stimulus.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "StimulusAgeSec"
+      ]
+    },
+    "Combat.StimulusKind": {
+      "type": "Enum",
+      "values": [
+        "None",
+        "WeaponReport",
+        "BulletImpact",
+        "NearMiss",
+        "AllyHitReaction",
+        "SuspiciousNoise"
+      ],
+      "description": "Тип стимула, который сейчас ведет investigation/search.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.WeaponReportLocation": {
+      "type": "Vector",
+      "description": "Оценка origin звука оружия: примерное место, откуда был произведен выстрел.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "WeaponReportLocation"
+      ]
+    },
+    "Combat.WeaponReportAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с последнего weapon-report sound.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "WeaponReportAgeSec"
+      ]
+    },
+    "Combat.WeaponReportConfidence": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Уверенность в origin звука оружия; снижается из-за эха, occlusion и неопределенности.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.BulletImpactLocation": {
+      "type": "Vector",
+      "description": "Место попадания пули рядом: геометрия, укрытие, земля или объект около агента/союзника.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "ImpactLocation"
+      ]
+    },
+    "Combat.BulletImpactAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с nearby bullet impact.",
+      "source": "Память боя / perception services / tactical tasks"
+    },
+    "Combat.NearMissDirection": {
+      "type": "Vector",
+      "description": "Примерное направление пули, которая прошла рядом и не попала в гуманоида.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "NearMissDirection"
+      ]
+    },
+    "Combat.NearMissAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с near-miss projectile event.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "NearMissAgeSec"
+      ]
+    },
+    "Combat.AllyHitReactionLocation": {
+      "type": "Vector",
+      "description": "Место реакции союзника на попадание/смерть, которую агент увидел или услышал.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "AllyHitReactionLocation"
+      ]
+    },
+    "Combat.AllyHitReactionAgeSec": {
+      "type": "Float",
+      "description": "Сколько секунд прошло с момента ally hit/death reaction.",
+      "source": "Память боя / perception services / tactical tasks",
+      "aliases": [
+        "AllyHitReactionAgeSec"
+      ]
+    },
+    "Weapon.AmmoInMag": {
+      "type": "Int",
+      "description": "Патроны в текущем магазине активного оружия.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "aliases": [
+        "AmmoInMag",
+        "PrimaryAmmoInMag"
+      ]
+    },
+    "Weapon.MagCapacity": {
+      "type": "Int",
+      "description": "Размер магазина активного оружия.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.HasSpareMagazine": {
+      "type": "Bool",
+      "description": "Есть ли запасной магазин или ресурс для перезарядки активного оружия.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "aliases": [
+        "SpareMagazines"
+      ]
+    },
+    "Weapon.HasSidearmReady": {
+      "type": "Bool",
+      "description": "Можно ли быстро переключиться на готовое вторичное оружие.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "aliases": [
+        "HasSidearm",
+        "SidearmReady"
+      ]
+    },
+    "Weapon.SafeReloadWindow": {
+      "type": "Bool",
+      "description": "Перезарядка достаточно безопасна с учетом укрытия, уверенности угрозы, exposure, incoming fire и длительности перезарядки.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.ExpectedRoundsPerSecond": {
+      "type": "Float",
+      "description": "Оценка текущего fire rate для выбранного поведения и профиля оружия. Используется в ammo pressure.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.EstimatedSecondsToEmpty": {
+      "type": "Float",
+      "description": "Прогноз времени до пустого магазина, если текущий режим огня продолжится.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "aliases": [
+        "PredictedTimeToEmpty"
+      ]
+    },
+    "Weapon.ReloadLeadTimeSec": {
+      "type": "Float",
+      "description": "Насколько заранее оружие должно искать укрытие перед перезарядкой. Выводится из длительности перезарядки и exposure policy.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.AmmoPressure": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Нормализованное давление боезапаса: скоро понадобится перезарядка, смена оружия или более безопасная позиция.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "aliases": [
+        "AmmoPressure"
+      ]
+    },
+    "Agent.HealthState": {
+      "type": "Enum",
+      "values": [
+        "Healthy",
+        "LightWounded",
+        "HeavyWounded",
+        "Critical"
+      ],
+      "description": "Уровень здоровья, который повышает cost рискованных действий и снижает допустимую exposure.",
+      "source": "Состояние агента / movement tasks",
+      "aliases": [
+        "HealthState"
+      ]
+    },
+    "Agent.Mobility": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Способность двигаться после ранений, усталости, stance или animation constraints.",
+      "source": "Состояние агента / movement tasks",
+      "aliases": [
+        "MobilityState"
+      ]
+    },
+    "Agent.MovementGait": {
+      "type": "Enum",
+      "values": [
+        "Walk",
+        "Jog",
+        "Sprint"
+      ],
+      "description": "Планируемый gait. Walk позволяет стрелять, Jog нужен для коротких тактических перемещений, Sprint самый быстрый, но блокирует огонь.",
+      "source": "Состояние агента / movement tasks"
+    },
+    "Agent.CanFireInCurrentGait": {
+      "type": "Bool",
+      "description": "Derived key от Agent.MovementGait. True только для Walk; Jog/Sprint блокируют стрельбу до переключения обратно.",
+      "source": "Состояние агента / movement tasks",
+      "aliases": [
+        "NotSprintingForFire"
+      ]
+    },
+    "Weapon.FireIntent": {
+      "type": "Enum",
+      "values": [
+        "None",
+        "AimOnly",
+        "ControlledBurst",
+        "Suppress"
+      ],
+      "description": "Ближайшее намерение по оружию. Блокирует Sprint, если план ожидает aim/fire в ближайшее время.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.IsAimedAtThreat": {
+      "type": "Bool",
+      "description": "Оружие наведено на активную угрозу или запланированную threat point.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Weapon.IsFiring": {
+      "type": "Bool",
+      "description": "Активна ли сейчас task стрельбы.",
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+    },
+    "Squad.SharedThreatLocation": {
+      "type": "Vector",
+      "description": "Лучшее squad-shared положение угрозы. Это не дубль Combat.ThreatLocation, а общий факт сквада.",
+      "source": "service.SquadFactSync / память сквада"
+    },
+    "Squad.SharedThreatConfidence": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Уверенность squad-shared информации об угрозе. Может отличаться от локальной Combat.ThreatConfidence.",
+      "source": "service.SquadFactSync / память сквада"
+    },
+    "Squad.SharedThreatAwareness": {
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Оценка сквада, что угроза знает про группу или смотрит в сектор группы.",
+      "source": "service.SquadFactSync / память сквада"
+    },
+    "Squad.AllyUnderFire": {
+      "type": "Bool",
+      "description": "True, когда союзник недавно получил попадание, умер или рядом с ним был near miss, достаточный для тактическое прерывание.",
+      "source": "service.SquadFactSync / память сквада"
+    },
+    "Squad.AllyCasualtyLocation": {
+      "type": "Vector",
+      "description": "Место недавнего попадания/смерти союзника, если shooter напрямую неизвестен.",
+      "source": "service.SquadFactSync / память сквада"
+    },
+    "Planner.Focus": {
+      "type": "Enum",
+      "values": [
+        "Objective",
+        "Patrol",
+        "Guard",
+        "MoveToInterest",
+        "ImmediateSurvival",
+        "ConfirmedContact",
+        "StalkForAmbush",
+        "LostContact",
+        "AmmoManagement"
+      ],
+      "description": "Debug/telemetry key для visual logger и анализа текущего фокуса планировщика.",
+      "source": "Planner/task telemetry"
+    },
+    "Objective.GuardPost": {
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "type": "Object",
+      "description": "Текущий или выбранный пост охраны внутри Objective.GuardArea. Нужен для сравнения текущей позиции с более полезными guard post кандидат."
+    },
+    "Objective.GuardPostExposure": {
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Оценка открытости guard post для известных опасных направлений. Чем выше значение, тем хуже пост для живучести.",
+      "aliases": [
+        "ExposureAtPost"
+      ]
+    },
+    "Objective.GuardSectorCoverageScore": {
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Насколько guard post покрывает назначенный сектор наблюдения. Используется вместе с exposure/risk, чтобы не бегать к посту только из-за геометрии.",
+      "aliases": [
+        "SectorCoverageScore"
+      ]
+    },
+    "Combat.CriticalSurvivalNeeded": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Bool",
+      "description": "Жесткий survival gate. True только когда короткий риск смерти достаточно высокий, чтобы перебить обычный бой или задача-задачу.",
+      "aliases": [
+        "CriticalSurvivalNeeded"
+      ]
+    },
+    "Combat.ThreatConfirmed": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Bool",
+      "description": "Есть подтвержденная угроза: direct LOS, свежий LKP с высокой уверенностью или надежный squad/combat cue.",
+      "aliases": [
+        "ThreatConfirmed"
+      ]
+    },
+    "Combat.ExplosiveRisk": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Риск взрыва или flush-ситуации рядом с текущей/планируемой позицией. Может принудительно выводить из укрытия.",
+      "aliases": [
+        "ExplosiveRisk"
+      ]
+    },
+    "Combat.LocalLOSBreakOffset": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Vector",
+      "description": "Короткое локальное смещение для разрыва LOS без длинного перебегания к дальнему укрытию.",
+      "aliases": [
+        "LocalLOSBREAKOffset"
+      ]
+    },
+    "Combat.NextSearchStep": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Object",
+      "description": "Следующий короткий cover-to-cover шаг поиска. Должен быть безопасен по маршруту, иначе поиск возвращается к задача alert.",
+      "aliases": [
+        "NextSearchStep"
+      ]
+    },
+    "Combat.CanExposeForShot": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Bool",
+      "description": "Можно ли безопасно коротко выглянуть/открыться для выстрела с учетом LOSQuality, exposure и текущего риска.",
+      "aliases": [
+        "CanExposeForShot"
+      ]
+    },
+    "Combat.SuppressibleCoverRoute": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Object",
+      "description": "Маршрут к укрытию, который сам по себе слишком рискован, но становится приемлемым при коротком подавлении.",
+      "aliases": [
+        "SuppressibleCoverRoute"
+      ]
+    },
+    "Combat.ExpectedSuppressionRouteRisk": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Ожидаемый риск suppressible route после учета эффекта краткого suppressive fire.",
+      "aliases": [
+        "ExpectedSuppressionRouteRisk"
+      ]
+    },
+    "Combat.StimulusConfidence": {
+      "source": "Память боя / perception services / tactical tasks",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Уверенность, что стимул достаточно полезен для поиска или тактического прерывания.",
+      "aliases": [
+        "StimulusConfidence"
+      ]
+    },
+    "Weapon.CanFire": {
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "type": "Bool",
+      "description": "Активное оружие может стрелять прямо сейчас: есть патроны, оружие не занято перезарядкой/сменой, а gait допускает огонь.",
+      "aliases": [
+        "WeaponCanFire"
+      ]
+    },
+    "Weapon.ReloadDurationSec": {
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "type": "Float",
+      "description": "Ожидаемая длительность перезарядки для активного оружия.",
+      "aliases": [
+        "ReloadDuration"
+      ]
+    },
+    "Weapon.ReloadCoverCandidate": {
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "type": "Object",
+      "description": "Укрытие, выбранное именно для подготовки к перезарядке. Может совпадать с Combat.SelectedCover, но относится к ammo recovery контексту.",
+      "aliases": [
+        "ReloadCoverCandidate"
+      ]
+    },
+    "Weapon.ShouldReloadEarly": {
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "type": "Bool",
+      "description": "Сработало правило ранней перезарядки: перезарядка до пустого магазина выгодна из-за профиля оружия, прогнозируемого расхода и безопасного окна.",
+      "aliases": [
+        "ShouldReloadEarly"
+      ]
+    },
+    "Agent.Posture": {
+      "source": "Состояние агента / movement tasks",
+      "type": "Enum",
+      "values": [
+        "Standing",
+        "Crouched"
+      ],
+      "description": "Текущая стойка гуманоида. Prone не используется, потому что в игре нельзя лечь."
+    },
+    "Squad.MemberPositions": {
+      "source": "service.SquadFactSync / память сквада",
+      "type": "Array<Vector>",
+      "description": "Позиции участников сквада, используемые для spacing, выбора patrol/guard points и избежания скучивания."
+    },
+    "Squad.ExposureRisk": {
+      "source": "service.SquadFactSync / память сквада",
+      "type": "Float",
+      "range": [
+        0,
+        1
+      ],
+      "description": "Риск раскрыть или подставить сквад при выбранном маршруте/позиции, особенно во время скрытого сближения.",
+      "aliases": [
+        "SquadExposureRisk"
+      ]
+    },
+    "Planner.TacticalInterruptionNeeded": {
+      "source": "Planner/task telemetry",
+      "type": "Bool",
+      "description": "Derived planner key: обычная назначенная задача должна быть прервана из-за survival, подтвержденный контакт, полезный стимул или Squad.AllyUnderFire.",
+      "aliases": [
+        "TacticalInterruptionNeeded"
+      ]
+    }
+  },
+  "decorators": {
+    "decorator.TacticalInterruptionNeeded": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_TacticalInterruptionNeeded",
+      "description": "Проходит, если обычную задачу нужно прервать из-за риска смерти, подтвержденной угрозы, полезного стимула или события с союзником.",
+      "reads": [
+        "Combat.ExpectedDeathRisk",
+        "Combat.ThreatConfidence",
+        "Combat.StimulusLocation",
+        "Combat.StimulusAgeSec",
+        "Squad.AllyUnderFire"
+      ],
+      "condition": "Combat.CriticalSurvivalNeeded OR Combat.ThreatConfirmed OR decorator.HasActionableStimulusOrLKP OR Squad.AllyUnderFire",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.HasPatrolObjective": {
+      "kind": "built_in_composition",
+      "ue_class": "UHTNDecorator_Blackboard",
+      "description": "Проходит, если агенту назначен patrol route.",
+      "reads": [
+        "Objective.CurrentKind",
+        "Objective.PatrolRoute"
+      ],
+      "condition": "Objective.CurrentKind == PatrolRoute AND Objective.PatrolRoute задан",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.HasGuardObjective": {
+      "kind": "built_in_composition",
+      "ue_class": "UHTNDecorator_Blackboard",
+      "description": "Проходит, если агенту назначена охрана области.",
+      "reads": [
+        "Objective.CurrentKind",
+        "Objective.GuardArea"
+      ],
+      "condition": "Objective.CurrentKind == GuardArea AND Objective.GuardArea задан",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.HasMoveToInterestObjective": {
+      "kind": "built_in_composition",
+      "ue_class": "UHTNDecorator_Blackboard",
+      "description": "Проходит, если агент должен перейти к точке интереса вне немедленного боя.",
+      "reads": [
+        "Objective.CurrentKind",
+        "Objective.InterestPoint",
+        "Objective.TargetLocation"
+      ],
+      "condition": "Objective.CurrentKind == MoveToInterestPoint AND (Objective.InterestPoint задан OR Objective.TargetLocation задан)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.HasActionableStimulusOrLKP": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_ActionableStimulusOrLKP",
+      "description": "Проходит, если есть свежая LKP или боевой стимул, по которому можно искать угрозу.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.LKPAgeSec",
+        "Combat.StimulusLocation",
+        "Combat.StimulusAgeSec",
+        "Combat.StimulusKind",
+        "Squad.AllyUnderFire"
+      ],
+      "condition": "(Combat.ThreatConfidence >= 0.42 AND Combat.LKPAgeSec <= 12) OR (Combat.StimulusLocation задан AND Combat.StimulusAgeSec <= 8 AND Combat.StimulusKind != None) OR Squad.AllyUnderFire",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.CriticalSurvivalNeeded": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_CriticalSurvivalNeeded",
+      "description": "Проходит, если агент с высокой вероятностью умрет в ближайшие секунды: плохая позиция, сильный входящий огонь, критическое здоровье или тяжелое ранение под давлением.",
+      "reads": [
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability",
+        "Combat.IncomingFire",
+        "Agent.HealthState"
+      ],
+      "condition": "Combat.ExpectedDeathRisk >= 0.55 OR Combat.CurrentPositionSurvivability <= 0.35 OR Combat.IncomingFire >= 0.65 OR Agent.HealthState == Critical OR (Agent.HealthState == HeavyWounded AND (Combat.ExpectedDeathRisk >= 0.4 OR Combat.CurrentPositionSurvivability <= 0.55 OR Combat.IncomingFire >= 0.35))",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор нужен, чтобы объединить риск позиции, входящий огонь и состояние здоровья в одно понятное условие выживания."
+    },
+    "decorator.ThreatConfirmed": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_ThreatConfidenceRange",
+      "description": "Проходит, если угроза подтверждена прямой видимостью или свежей LKP с достаточной уверенностью.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.LOSQuality",
+        "Combat.LKPAgeSec"
+      ],
+      "condition": "Combat.ThreatConfidence >= 0.58 AND (Combat.LOSQuality >= 0.45 OR Combat.LKPAgeSec <= 6)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор дает одну понятную причину отказа для уверенности, LOS и свежести LKP."
+    },
+    "decorator.HasRecentStimulus": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_RecentStimulus",
+      "description": "Проходит, если есть свежий подозрительный стимул, даже если он не классифицирован как выстрел, impact или реакция союзника.",
+      "reads": [
+        "Combat.StimulusLocation",
+        "Combat.StimulusAgeSec"
+      ],
+      "condition": "Combat.StimulusLocation задан AND Combat.StimulusAgeSec <= 8",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      },
+      "default_alternative": "Можно заменить проверками Blackboard, если свежесть стимула уже считается сервисом."
+    },
+    "decorator.LKPFreshEnoughForPursuit": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_LKPFreshness",
+      "description": "Проходит, если LKP еще достаточно свежая для осторожного поиска.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.LKPAgeSec"
+      ],
+      "condition": "Combat.ThreatConfidence >= 0.42 AND Combat.LKPAgeSec <= 12",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный вариант удобен, чтобы явно показать причину устаревшей LKP."
+    },
+    "decorator.HasSafeCoverCandidate": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_HasSafeCoverCandidate",
+      "description": "Проходит, если выбранное укрытие существует и реально помогает против текущего направления угрозы.",
+      "reads": [
+        "Combat.SelectedCover",
+        "Combat.SelectedCoverLocation",
+        "Combat.ReappearanceRisk"
+      ],
+      "condition": "Combat.SelectedCover задан AND Combat.ReappearanceRisk <= 0.55",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      },
+      "default_alternative": "Blackboard Is Set недостаточно: укрытие должно быть полезным по геометрии угрозы."
+    },
+    "decorator.CoverRouteAcceptable": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_CoverRouteRisk",
+      "description": "Проходит, если путь к выбранному укрытию не требует смертельного пересечения открытой зоны.",
+      "reads": [
+        "Combat.CoverRouteRisk",
+        "Combat.IncomingFire",
+        "Agent.Mobility"
+      ],
+      "condition": "Combat.CoverRouteRisk <= 0.68; порог строже при высоком Combat.IncomingFire или низкой Agent.Mobility",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужна оценка риска маршрута; простых проверок дистанции или trace недостаточно."
+    },
+    "decorator.ApproachRouteAcceptable": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_ApproachRouteRisk",
+      "description": "Проходит, если маршрут сближения достаточно прикрыт и не раскрывает агента раньше времени.",
+      "reads": [
+        "Combat.ApproachRouteRisk",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Agent.Mobility"
+      ],
+      "condition": "Combat.ApproachRouteRisk <= 0.52 AND Combat.ThreatAwarenessOfAgent <= 0.45 AND Combat.ThreatFacingAgent <= 0.45",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужен кастомный расчет риска раскрытия на маршруте."
+    },
+    "decorator.ThreatUnawareOrNotFacing": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_ThreatAwareness",
+      "description": "Проходит, если угроза, вероятно, не знает об агенте или не смотрит в его сектор.",
+      "reads": [
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Squad.SharedThreatAwareness"
+      ],
+      "condition": "max(Combat.ThreatAwarenessOfAgent, Squad.SharedThreatAwareness) <= 0.35 AND Combat.ThreatFacingAgent <= 0.4",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор объединяет осведомленность угрозы и направление взгляда в одну причину отказа."
+    },
+    "decorator.CanStalkCloser": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_CanStalkCloser",
+      "description": "Проходит, если угроза подтверждена, далеко, не осведомлена, а маршрут позволяет скрытно занять лучшую позицию.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.DistanceToThreat",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Combat.ApproachRouteRisk"
+      ],
+      "condition": "Combat.ThreatConfidence >= 0.58 AND Combat.DistanceToThreat >= 35m AND Combat.ThreatAwarenessOfAgent <= 0.35 AND Combat.ThreatFacingAgent <= 0.4 AND Combat.ApproachRouteRisk <= 0.52",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужна единая проверка дистанции, осведомленности, направления взгляда и риска маршрута."
+    },
+    "decorator.CloseThreatRequiresImmediateFight": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_CloseThreatImmediateFight",
+      "description": "Проходит, если угроза близко или уже давит огнем, поэтому агент должен отвечать боем во время отхода к укрытию.",
+      "reads": [
+        "Combat.DistanceToThreat",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Combat.IncomingFire",
+        "Combat.ThreatConfidence"
+      ],
+      "condition": "Combat.ThreatConfidence >= 0.58 AND (Combat.DistanceToThreat <= 12m OR Combat.IncomingFire >= 0.45 OR (Combat.DistanceToThreat <= 20m AND (Combat.ThreatAwarenessOfAgent >= 0.65 OR Combat.ThreatFacingAgent >= 0.7)))",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор связывает дистанцию, осведомленность угрозы и необходимость немедленного огня."
+    },
+    "decorator.CanExposeForShot": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_CanExposeForShot",
+      "description": "Проходит, если короткое открытие для выстрела не выглядит смертельным.",
+      "reads": [
+        "Combat.LOSQuality",
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability",
+        "Combat.ReappearanceRisk"
+      ],
+      "condition": "Combat.LOSQuality >= 0.45 AND Combat.ExpectedDeathRisk <= 0.45 AND Combat.CurrentPositionSurvivability >= 0.45",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Trace Test проверит видимость, но не оценит риск экспозиции."
+    },
+    "decorator.SafeReloadWindow": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_SafeReloadWindow",
+      "description": "Проходит, если перезарядка сейчас достаточно безопасна по укрытию, давлению огня и уверенности в угрозе.",
+      "reads": [
+        "Weapon.SafeReloadWindow",
+        "Combat.ThreatConfidence",
+        "Combat.IncomingFire",
+        "Combat.CurrentPositionSurvivability"
+      ],
+      "condition": "Weapon.SafeReloadWindow == true AND (Combat.ThreatConfidence < 0.55 OR Combat.CurrentPositionSurvivability >= 0.65) AND Combat.IncomingFire < 0.45",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор централизует правило безопасной перезарядки."
+    },
+    "decorator.ShouldReloadEarly": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_ReloadPolicy",
+      "description": "Проходит, если пора перезарядиться до пустого магазина: окно безопасно, а профиль оружия показывает скорую проблему с боезапасом.",
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.MagCapacity",
+        "Weapon.HasSpareMagazine",
+        "Weapon.SafeReloadWindow",
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.ReloadLeadTimeSec",
+        "Weapon.AmmoPressure",
+        "Combat.ThreatConfidence"
+      ],
+      "condition": "Weapon.HasSpareMagazine AND Weapon.SafeReloadWindow AND (Weapon.AmmoInMag / Weapon.MagCapacity <= 0.33 OR Weapon.EstimatedSecondsToEmpty <= Weapon.ReloadLeadTimeSec + 1.5 OR Weapon.AmmoPressure >= 0.7) AND Combat.ThreatConfidence < 0.75",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      },
+      "default_alternative": "Кастомное правило проще настраивать по профилям оружия."
+    },
+    "decorator.LowAmmoRepositionSoon": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_LowAmmoRepositionSoon",
+      "description": "Проходит, если магазин еще не пустой, но агенту уже нужно смещаться к укрытию для будущей перезарядки.",
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.MagCapacity",
+        "Weapon.HasSpareMagazine",
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.ReloadLeadTimeSec",
+        "Weapon.AmmoPressure",
+        "Weapon.SafeReloadWindow",
+        "Combat.CurrentPositionSurvivability"
+      ],
+      "condition": "Weapon.AmmoInMag > 0 AND Weapon.HasSpareMagazine AND (Weapon.AmmoPressure >= 0.65 OR Weapon.EstimatedSecondsToEmpty <= Weapon.ReloadLeadTimeSec + 2.0) AND (Weapon.SafeReloadWindow == false OR Combat.CurrentPositionSurvivability < 0.65)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужно правило с учетом темпа стрельбы, времени перезарядки и текущего риска позиции."
+    },
+    "decorator.WeaponCanFire": {
+      "kind": "built_in_composition",
+      "ue_class": "UHTNDecorator_Blackboard",
+      "description": "Проходит, если активное оружие может сделать осмысленную короткую очередь.",
+      "reads": [
+        "Weapon.AmmoInMag"
+      ],
+      "condition": "Weapon.AmmoInMag > 0 AND Weapon.CanFire == true",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.NotSprintingForFire": {
+      "kind": "built_in_composition",
+      "ue_class": "UHTNDecorator_Blackboard",
+      "description": "Проходит, если текущий gait позволяет стрелять.",
+      "reads": [
+        "Agent.MovementGait",
+        "Agent.CanFireInCurrentGait"
+      ],
+      "condition": "Agent.MovementGait == Walk AND Agent.CanFireInCurrentGait == true",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.SprintAllowedNoImmediateFire": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_SprintAllowedNoImmediateFire",
+      "description": "Проходит, если в ближайшем плане нет прицеливания или огня, и быстрый уход безопаснее медленного движения.",
+      "reads": [
+        "Weapon.FireIntent",
+        "Weapon.IsFiring",
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability"
+      ],
+      "condition": "Weapon.IsFiring == false AND Weapon.FireIntent == None AND (Combat.ExpectedDeathRisk >= 0.45 OR Combat.CurrentPositionSurvivability < 0.65)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Кастомный декоратор нужен, чтобы не совмещать Sprint с ожидаемым окном огня."
+    },
+    "decorator.NeedsCombatAmmoAction": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_NeedsCombatAmmoAction",
+      "description": "Проходит, если оружие уже не поддерживает текущий боевой план: пустой магазин, небезопасная перезарядка или скорый дефицит боезапаса.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.CurrentPositionSurvivability",
+        "Weapon.AmmoInMag",
+        "Weapon.MagCapacity",
+        "Weapon.HasSidearmReady",
+        "Weapon.HasSpareMagazine",
+        "Weapon.SafeReloadWindow",
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.ReloadLeadTimeSec",
+        "Weapon.AmmoPressure"
+      ],
+      "condition": "Combat.ThreatConfidence >= 0.55 AND ((Weapon.AmmoInMag <= 0 AND (Weapon.HasSidearmReady OR Weapon.HasSpareMagazine)) OR (Weapon.HasSpareMagazine AND (Weapon.SafeReloadWindow AND Weapon.AmmoInMag / Weapon.MagCapacity <= 0.33 OR Weapon.AmmoPressure >= 0.65 OR Weapon.EstimatedSecondsToEmpty <= Weapon.ReloadLeadTimeSec + 2.0)))",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.PrimaryEmptyReloadUnsafe": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_PrimaryEmptyReloadUnsafe",
+      "description": "Проходит, если основное оружие пустое, есть вторичное оружие, а перезарядка сейчас опасна.",
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.HasSidearmReady",
+        "Weapon.SafeReloadWindow",
+        "Combat.ThreatConfidence"
+      ],
+      "condition": "Weapon.AmmoInMag <= 0 AND Weapon.HasSidearmReady AND (Weapon.SafeReloadWindow == false OR Combat.ThreatConfidence >= 0.65)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": false,
+        "event_based": true
+      }
+    },
+    "decorator.NoGrenadeOrImmediateFlush": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_NoImmediateFlushThreat",
+      "description": "Проходит, если текущее укрытие можно удерживать и его не нужно срочно покидать из-за гранаты или выдавливания из укрытия.",
+      "reads": [
+        "Combat.ExpectedDeathRisk",
+        "Combat.ReappearanceRisk"
+      ],
+      "condition": "Combat.ExplosiveRisk низкий AND Combat.ExpectedDeathRisk из текущего укрытия <= 0.5",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужна игровая проверка гранаты или другой угрозы, которая вынуждает покинуть укрытие."
+    },
+    "decorator.HasRecentWeaponReport": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_HasRecentWeaponReport",
+      "description": "Проходит, если недавно был слышен источник выстрела. Это примерная точка выстрела, а не точная позиция угрозы.",
+      "reads": [
+        "Combat.WeaponReportLocation",
+        "Combat.WeaponReportAgeSec",
+        "Combat.WeaponReportConfidence"
+      ],
+      "condition": "Combat.WeaponReportLocation задан AND Combat.WeaponReportAgeSec <= 4.0 AND Combat.WeaponReportConfidence >= 0.35",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.HasRecentImpactOrNearMiss": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_HasRecentImpactOrNearMiss",
+      "description": "Проходит, если рядом был bullet impact или near miss, указывающий направление входящего огня.",
+      "reads": [
+        "Combat.BulletImpactLocation",
+        "Combat.BulletImpactAgeSec",
+        "Combat.NearMissDirection",
+        "Combat.NearMissAgeSec"
+      ],
+      "condition": "(Combat.BulletImpactLocation задан AND Combat.BulletImpactAgeSec <= 3.0) OR (Combat.NearMissDirection задан AND Combat.NearMissAgeSec <= 2.0)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.HasRecentAllyHitReaction": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_HasRecentAllyHitReaction",
+      "description": "Проходит, если союзник недавно получил попадание, погиб или пережил near miss рядом.",
+      "reads": [
+        "Squad.AllyUnderFire",
+        "Combat.AllyHitReactionLocation",
+        "Combat.AllyHitReactionAgeSec",
+        "Squad.AllyCasualtyLocation"
+      ],
+      "condition": "Squad.AllyUnderFire OR (Combat.AllyHitReactionLocation задан AND Combat.AllyHitReactionAgeSec <= 5.0)",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      }
+    },
+    "decorator.SuppressibleCoverRoute": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_SuppressibleCoverRoute",
+      "description": "Проходит, если обычный путь к укрытию рискован, но короткое подавление делает его приемлемым.",
+      "reads": [
+        "Combat.SelectedCover",
+        "Combat.SelectedCoverLocation",
+        "Combat.CoverRouteRisk",
+        "Combat.IncomingFire",
+        "Weapon.AmmoInMag",
+        "Agent.Mobility"
+      ],
+      "condition": "Combat.SelectedCover задан AND Weapon.AmmoInMag > 0 AND Combat.CoverRouteRisk <= 0.86 AND Combat.ExpectedSuppressionRouteRisk <= 0.68",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Нужна оценка риска маршрута после планируемого подавляющего огня."
+    }
+  },
+  "services": {
+    "service.UpdateThreatFacts": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_UpdateThreatFacts",
+      "description": "Обновляет факты угрозы: видимость, память, дистанцию, укрытия, направление огня и риск позиции.",
+      "writes": [
+        "Combat.ThreatActor",
+        "Combat.ThreatLocation",
+        "Combat.ThreatLocationMoveDelta",
+        "Combat.ThreatConfidence",
+        "Combat.LOSQuality",
+        "Combat.DistanceToThreat",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Combat.IncomingFire",
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability"
+      ],
+      "tick_interval_sec": [
+        0.12,
+        0.25
+      ],
+      "scope": "Root or combat scopes",
+      "replan": "Не делает replan напрямую; отправляет event-based decorator notifications, когда ключевые tactical facts пересекают пороги."
+    },
+    "service.UpdateObjectiveFacts": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_UpdateObjectiveFacts",
+      "description": "Обновляет назначенную задачу агента: patrol route, guard area, point of interest, priority и target location.",
+      "reads": [
+        "Objective.CurrentKind",
+        "Objective.PatrolRoute",
+        "Objective.GuardArea",
+        "Objective.InterestPoint"
+      ],
+      "writes": [
+        "Objective.TargetLocation",
+        "Objective.Priority",
+        "Planner.Focus"
+      ],
+      "tick_interval_sec": [
+        0.5,
+        1
+      ],
+      "scope": "High-level objective root",
+      "replan": "Может запросить Try To Adjust Current Plan, когда squad objective меняется или target objective location значимо смещается."
+    },
+    "service.UpdateStimulusFacts": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_UpdateStimulusFacts",
+      "description": "Сводит perception events в боевые стимулы: источник выстрела, impact, near miss или реакцию союзника.",
+      "reads": [
+        "Combat.WeaponReportLocation",
+        "Combat.WeaponReportAgeSec",
+        "Combat.WeaponReportConfidence",
+        "Combat.BulletImpactLocation",
+        "Combat.BulletImpactAgeSec",
+        "Combat.NearMissDirection",
+        "Combat.NearMissAgeSec",
+        "Combat.AllyHitReactionLocation",
+        "Combat.AllyHitReactionAgeSec",
+        "Squad.AllyUnderFire"
+      ],
+      "writes": [
+        "Combat.StimulusLocation",
+        "Combat.StimulusAgeSec",
+        "Combat.StimulusKind",
+        "Combat.SearchAnchor"
+      ],
+      "tick_interval_sec": [
+        0.1,
+        0.25
+      ],
+      "scope": "Root and lost-contact/search scopes",
+      "replan": {
+        "planning_type": "Try To Adjust Current Plan",
+        "force_abort_plan": false,
+        "debug_reason": "Изменился actionable tactical stimulus"
+      }
+    },
+    "service.UpdateAmmoPressure": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_UpdateAmmoPressure",
+      "description": "Считает ammo pressure по профилю оружия, магазину, fire rate, длительности перезарядки и дистанции боя. При пересечении порогов запрашивает replan.",
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.MagCapacity",
+        "Weapon.ExpectedRoundsPerSecond",
+        "Weapon.FireIntent",
+        "Combat.DistanceToThreat",
+        "Combat.ThreatConfidence"
+      ],
+      "writes": [
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.ReloadLeadTimeSec",
+        "Weapon.AmmoPressure"
+      ],
+      "tick_interval_sec": [
+        0.15,
+        0.35
+      ],
+      "scope": "Root, confirmed contact, and ammo scopes",
+      "replan": {
+        "planning_type": "Try To Adjust Current Plan",
+        "force_abort_plan": false,
+        "debug_reason": "Ammo pressure или empty-mag threshold пересечен"
+      }
+    },
+    "service.SquadFactSync": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_SquadFactSync",
+      "description": "Синхронизирует локальные факты угрозы с общими фактами сквада без отдельного voice/callout action.",
+      "reads": [
+        "Combat.ThreatLocation",
+        "Combat.ThreatConfidence",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.AllyHitReactionLocation",
+        "Combat.AllyHitReactionAgeSec"
+      ],
+      "writes": [
+        "Squad.SharedThreatLocation",
+        "Squad.SharedThreatConfidence",
+        "Squad.SharedThreatAwareness",
+        "Squad.AllyUnderFire",
+        "Squad.AllyCasualtyLocation"
+      ],
+      "tick_interval_sec": [
+        0.35,
+        0.65
+      ],
+      "scope": "Root",
+      "replan": "Может уведомить threat-confidence decorators, когда shared facts значимо изменились."
+    },
+    "service.ReplanOnCombatFactChange": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_ReplanOnCombatFactChange",
+      "description": "Запрашивает Try To Adjust Current Plan, когда важный боевой факт пересекает порог поведения.",
+      "reads": [
+        "Combat.ThreatConfidence",
+        "Combat.DistanceToThreat",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Combat.IncomingFire",
+        "Combat.CoverRouteRisk",
+        "Combat.CurrentPositionSurvivability",
+        "Agent.MovementGait",
+        "Weapon.AmmoInMag",
+        "Weapon.AmmoPressure",
+        "Weapon.FireIntent",
+        "Weapon.IsFiring",
+        "Agent.HealthState",
+        "Agent.Mobility",
+        "Weapon.SafeReloadWindow",
+        "Weapon.EstimatedSecondsToEmpty"
+      ],
+      "tick_interval_sec": [
+        0.15,
+        0.35
+      ],
+      "scope": "Root and major combat scopes",
+      "replan": {
+        "planning_type": "Try To Adjust Current Plan",
+        "force_abort_plan": false,
+        "force_restart_active_planning": true,
+        "debug_reason": "Изменился combat, health, movement или ammo threshold"
+      }
+    },
+    "service.ValidateCoverRoute": {
+      "kind": "custom",
+      "ue_class": "UTAHTNService_ValidateCoverRoute",
+      "description": "Переоценивает выбранное укрытие, маршрут и exposure. Инвалидирует план, если путь или cover стали смертельными.",
+      "reads": [
+        "Combat.SelectedCover",
+        "Combat.SelectedCoverLocation",
+        "Combat.CoverRouteRisk",
+        "Combat.ApproachRouteRisk",
+        "Combat.ReappearanceRisk"
+      ],
+      "writes": [
+        "Combat.CoverRouteRisk",
+        "Combat.ApproachRouteRisk",
+        "Combat.ReappearanceRisk"
+      ],
+      "tick_interval_sec": [
+        0.2,
+        0.4
+      ],
+      "scope": "Cover movement and cover hold scopes",
+      "replan": {
+        "planning_type": "Normal",
+        "force_abort_plan": false,
+        "debug_reason": "Cover или route стал невалидным"
+      }
+    },
+    "service.ReplanIfThreatLocationChanges": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNService_ReplanIfLocationChanges",
+      "description": "Запрашивает replan только при значимом смещении Combat.ThreatLocation: дистанционный порог, смена LOS/nav bucket или минимальный интервал.",
+      "reads": [
+        "Combat.ThreatLocation",
+        "Combat.ThreatLocationMoveDelta",
+        "Combat.ThreatLocationReplanThreshold",
+        "Combat.ThreatLocationReplanMinIntervalSec",
+        "Combat.LOSQuality"
+      ],
+      "tick_interval_sec": [
+        0.2,
+        0.4
+      ],
+      "scope": "Attack/search subplans",
+      "settings": {
+        "LocationKey": "Combat.ThreatLocation",
+        "MinMoveDeltaMeters": "max(Combat.ThreatLocationReplanThreshold, 2.5)",
+        "MinIntervalSec": "max(Combat.ThreatLocationReplanMinIntervalSec, 0.75)",
+        "AlsoReplanOnLOSBucketChange": true,
+        "IgnoreMicroMovement": true
+      },
+      "replan": {
+        "planning_type": "Try To Adjust Current Plan",
+        "force_abort_plan": false,
+        "debug_reason": "Threat location сместилась за tactical threshold"
+      }
+    }
+  },
+  "task_library": {
+    "task.SetPlannerFocus": {
+      "kind": "built_in",
+      "ue_class": "UHTNTask_SetValue",
+      "description": "Пишет Planner.Focus для debug/telemetry. На gameplay не влияет.",
+      "cost": {
+        "base": 0
+      },
+      "effects": [
+        "Planner.Focus = заданное значение"
+      ]
+    },
+    "task.SetGaitWalk": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
+      "description": "Пишет Agent.MovementGait = Walk как факт планирования. Это влияет на time/cost окна огня.",
+      "cost": {
+        "base": 1,
+        "formula": "small animation/acceleration transition cost"
+      },
+      "effects": [
+        "Agent.MovementGait = Walk",
+        "Agent.CanFireInCurrentGait = true"
+      ]
+    },
+    "task.SetGaitJog": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
+      "description": "Пишет Agent.MovementGait = Jog для короткого тактического перемещения без ближайшего окна огня.",
+      "cost": {
+        "base": 1,
+        "formula": "small animation/acceleration transition cost"
+      },
+      "effects": [
+        "Agent.MovementGait = Jog",
+        "Agent.CanFireInCurrentGait = false"
+      ]
+    },
+    "task.SetGaitSprint": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
+      "description": "Пишет Agent.MovementGait = Sprint для быстрого ухода или достижения укрытия. Кандидаты огня должны быть неактивны.",
+      "cost": {
+        "base": 1,
+        "formula": "small animation/acceleration transition cost - fast_hide_bonus_as_cost_reduction"
+      },
+      "effects": [
+        "Agent.MovementGait = Sprint",
+        "Agent.CanFireInCurrentGait = false",
+        "Weapon.FireIntent = None"
+      ]
+    },
+    "task.AimWeaponAtThreat": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_AimWeaponAtThreat",
+      "description": "Наводит активное оружие на Combat.ThreatActor или Combat.ThreatLocation перед огнем.",
+      "cost": {
+        "base": 4,
+        "formula": "aim_time * time_cost + exposure_penalty"
+      },
+      "reads": [
+        "Combat.ThreatActor",
+        "Combat.ThreatLocation",
+        "Agent.MovementGait",
+        "Agent.CanFireInCurrentGait"
+      ],
+      "effects": [
+        "Weapon.IsAimedAtThreat = true",
+        "Weapon.FireIntent = AimOnly"
+      ]
+    },
+    "task.StartControlledFire": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_StartWeaponFire",
+      "description": "Запускает короткое окно контролируемого огня.",
+      "cost": {
+        "base": 8,
+        "formula": "ammo_spend_penalty + exposure_penalty + recoil/recovery time"
+      },
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.IsAimedAtThreat",
+        "Agent.MovementGait",
+        "Agent.CanFireInCurrentGait",
+        "Combat.LOSQuality",
+        "Combat.ExpectedDeathRisk"
+      ],
+      "effects": [
+        "Weapon.IsFiring = true",
+        "Weapon.FireIntent = ControlledBurst",
+        "Weapon.AmmoInMag уменьшается",
+        "Combat.IncomingFire у угрозы может вырасти",
+        "Может вызвать Replan, когда оружие больше не может стрелять"
+      ],
+      "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
+    },
+    "task.StartSuppressiveFire": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_StartWeaponFire",
+      "description": "Запускает короткое подавление, чтобы снизить риск маршрута во время движения.",
+      "cost": {
+        "base": 12,
+        "formula": "ammo_spend_penalty + exposure_penalty"
+      },
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Weapon.IsAimedAtThreat",
+        "Agent.MovementGait",
+        "Agent.CanFireInCurrentGait",
+        "Combat.LOSQuality"
+      ],
+      "effects": [
+        "Weapon.IsFiring = true",
+        "Weapon.FireIntent = Suppress",
+        "Weapon.AmmoInMag уменьшается",
+        "Combat.CoverRouteRisk может снизиться",
+        "Может вызвать Replan, когда оружие больше не может стрелять"
+      ],
+      "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
+    },
+    "task.StopWeaponFire": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_StopWeaponFire",
+      "description": "Останавливает текущую стрельбу перед быстрым движением, перезарядкой, сменой оружия или завершением экспозиции.",
+      "cost": {
+        "base": 1
+      },
+      "effects": [
+        "Weapon.IsFiring = false",
+        "Weapon.FireIntent = None"
+      ]
+    },
+    "task.FindSafeCover": {
+      "kind": "built_in_plus_custom_scoring",
+      "ue_class": "UHTNTask_EQSQuery or UTAHTNTask_FindSafeCover",
+      "description": "Находит укрытия, которые реально снижают риск против текущей угрозы.",
+      "cost": {
+        "base": 8,
+        "formula": "query_cost + path_cost + exposure_penalty + reappearance_penalty"
+      },
+      "effects": [
+        "Combat.SelectedCover",
+        "Combat.SelectedCoverLocation",
+        "Combat.CoverRouteRisk",
+        "Combat.ReappearanceRisk"
+      ],
+      "create_plan_steps": "Создать candidate step на каждое подходящее укрытие; записать Combat.SelectedCover, Combat.SelectedCoverLocation, Combat.CoverRouteRisk и cost. Ограничить 3-5 лучшими вариантами."
+    },
+    "task.ReserveCover": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_ReserveCover",
+      "description": "Резервирует выбранный cover slot для агента, чтобы союзники не занимали один и тот же слот.",
+      "cost": {
+        "base": 2
+      },
+      "effects": [
+        "Combat.ReservedCoverId"
+      ],
+      "execution": "На старте execution зарезервировать slot, при завершении или abort освободить."
+    },
+    "task.MoveToSelectedCover": {
+      "kind": "built_in",
+      "ue_class": "UHTNTask_MoveTo",
+      "description": "Двигается к Combat.SelectedCoverLocation с текущим Agent.MovementGait. Planning должен проверять путь.",
+      "cost": {
+        "base": 5,
+        "formula": "path_length * path_cost_per_meter + CoverRouteRisk * exposure_penalty + wound_mobility_penalty"
+      },
+      "reads": [
+        "Combat.SelectedCoverLocation",
+        "Combat.CoverRouteRisk",
+        "Agent.Mobility",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation = Combat.SelectedCoverLocation",
+        "Движение использует Agent.MovementGait"
+      ],
+      "settings": {
+        "BlackboardKey": "Combat.SelectedCoverLocation",
+        "TestPathDuringPlanning": true,
+        "UsePathCostInsteadOfLength": true,
+        "AllowPartialPath": false,
+        "ObserveBlackboardValue": false
+      }
+    },
+    "task.EnterCoverStance": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_EnterCoverStance",
+      "description": "Выбирает доступную стойку и степень exposure под выбранное укрытие.",
+      "cost": {
+        "base": 4
+      },
+      "effects": [
+        "Combat.CurrentPositionSurvivability увеличивается",
+        "Combat.ExpectedDeathRisk обычно снижается, если cover валиден",
+        "Exposure агента снижается",
+        "Weapon.SafeReloadWindow может стать true"
+      ]
+    },
+    "task.WaitInCoverReassess": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_Wait or UTAHTNTask_WaitAndReassess",
+      "description": "Коротко удерживает укрытие, пока services обновляют угрозу и риск.",
+      "cost": {
+        "base": 6,
+        "formula": "wait_time * time_cost_per_second"
+      },
+      "settings": {
+        "WaitTimeSec": [
+          0.8,
+          2.2
+        ],
+        "RandomDeviation": 0.4
+      },
+      "effects": [
+        "Services обновляют threat, LOS, survivability, ammo pressure и stimulus facts",
+        "Может завершить survival branch, когда Combat.CriticalSurvivalNeeded становится false",
+        "После wait может вернуть планирование к confirmed contact, lost contact или objective"
+      ],
+      "execution": "После ожидания или event-based изменения запросить plan adjustment, чтобы агент не застревал в survival."
+    },
+    "task.ReduceExposureInPlace": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_ReduceExposureInPlace",
+      "description": "Снижает exposure на месте, когда путь к укрытию слишком рискован или укрытия нет. Использует только доступные stance/lean/short sidestep, без prone.",
+      "cost": {
+        "base": 10,
+        "formula": "base - immediate_survival_gain_as_cost_avoidance"
+      },
+      "effects": [
+        "Combat.CurrentPositionSurvivability умеренно увеличивается",
+        "Combat.ExpectedDeathRisk может упасть ниже survival threshold, если проблема была в локальной exposure",
+        "Exposure агента снижается без prone"
+      ]
+    },
+    "task.BreakLOSLateral": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_BreakLOSLateral",
+      "description": "Делает короткое боковое смещение, чтобы разорвать известную линию огня без длинного рывка по открытому месту.",
+      "cost": {
+        "base": 18,
+        "formula": "short_path_cost + exposure_peak_penalty"
+      },
+      "effects": [
+        "SelfLocation меняется",
+        "Combat.LOSQuality снижается",
+        "Combat.ExpectedDeathRisk снижается при успехе"
+      ]
+    },
+    "task.FindFiringPosition": {
+      "kind": "built_in_plus_custom_scoring",
+      "ue_class": "UHTNTask_EQSQuery or UTAHTNTask_FindFiringPosition",
+      "description": "Ищет огневые позиции с приемлемым LOS, cover, flank risk и path cost.",
+      "cost": {
+        "base": 10,
+        "formula": "path_cost + exposure_penalty + uncertainty_penalty - good_cover_bonus_as_cost_reduction"
+      },
+      "effects": [
+        "Combat.PeekLocation",
+        "Combat.CoverRouteRisk",
+        "Combat.ReappearanceRisk"
+      ]
+    },
+    "task.MoveToFiringPosition": {
+      "kind": "built_in",
+      "ue_class": "UHTNTask_MoveTo",
+      "description": "Двигается к Combat.PeekLocation или выбранной огневой позиции. Gait выбирается отдельной task и влияет на time/cost.",
+      "cost": {
+        "base": 6,
+        "formula": "path_cost + route_risk_penalty"
+      },
+      "reads": [
+        "Combat.PeekLocation",
+        "Combat.CoverRouteRisk",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation = Combat.PeekLocation",
+        "Движение использует Agent.MovementGait"
+      ]
+    },
+    "task.FindAmbushApproachPosition": {
+      "kind": "built_in_plus_custom_scoring",
+      "ue_class": "UHTNTask_EQSQuery or UTAHTNTask_FindAmbushApproachPosition",
+      "description": "Ищет прикрытую позицию ближе к угрозе, чтобы получить лучший первый угол атаки без раннего раскрытия.",
+      "cost": {
+        "base": 12,
+        "formula": "path_cost + approach_route_risk + distance_mismatch_penalty - covered_angle_bonus_as_cost_reduction"
+      },
+      "reads": [
+        "Combat.ThreatLocation",
+        "Combat.DistanceToThreat",
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent"
+      ],
+      "effects": [
+        "Combat.PreferredAttackPosition",
+        "Combat.ApproachRouteRisk",
+        "Combat.CoverRouteRisk"
+      ],
+      "create_plan_steps": "Создать несколько approach positions, которые сокращают дистанцию без высокого reveal/exposure risk."
+    },
+    "task.MoveToAmbushApproachPosition": {
+      "kind": "built_in",
+      "ue_class": "UHTNTask_MoveTo",
+      "description": "Двигается к Combat.PreferredAttackPosition, избегая открытых и раскрывающих маршрутов.",
+      "cost": {
+        "base": 8,
+        "formula": "path_cost + approach_route_risk * exposure_penalty + premature_reveal_penalty"
+      },
+      "reads": [
+        "Combat.PreferredAttackPosition",
+        "Combat.ApproachRouteRisk",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation = Combat.PreferredAttackPosition",
+        "Combat.DistanceToThreat уменьшается",
+        "Движение использует Agent.MovementGait"
+      ],
+      "settings": {
+        "BlackboardKey": "Combat.PreferredAttackPosition",
+        "TestPathDuringPlanning": true,
+        "UsePathCostInsteadOfLength": true,
+        "AllowPartialPath": false,
+        "ObserveBlackboardValue": false
+      }
+    },
+    "task.HoldAmbushAngle": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_HoldAmbushAngle",
+      "description": "Удерживает прикрытый угол до выгодного момента атаки, потери скрытности или ухудшения позиции.",
+      "cost": {
+        "base": 10,
+        "formula": "short_wait_time * time_cost + reappearance_risk_penalty"
+      },
+      "reads": [
+        "Combat.ThreatAwarenessOfAgent",
+        "Combat.ThreatFacingAgent",
+        "Combat.DistanceToThreat"
+      ],
+      "effects": [
+        "Planner.Focus = StalkForAmbush",
+        "Combat.ThreatConfidence обновляется"
+      ]
+    },
+    "task.PeekAndSampleLOS": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_PeekAndSampleLOS",
+      "description": "Коротко выглядывает из укрытия и обновляет Combat.LOSQuality и ThreatConfidence.",
+      "cost": {
+        "base": 16,
+        "formula": "exposure_time * exposure_penalty + expected_death_risk_penalty"
+      },
+      "effects": [
+        "Combat.LOSQuality",
+        "Combat.ThreatConfidence",
+        "Combat.ThreatLocation"
+      ]
+    },
+    "task.FireControlledBurst": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_FireControlledBurst",
+      "description": "Делает короткую контролируемую очередь. Не используется как бесконечный непрерывную стрельбу.",
+      "cost": {
+        "base": 14,
+        "formula": "ammo_spend_penalty + exposure_penalty + recoil/recovery time"
+      },
+      "reads": [
+        "Weapon.AmmoInMag",
+        "Combat.LOSQuality",
+        "Combat.ExpectedDeathRisk"
+      ],
+      "effects": [
+        "Weapon.AmmoInMag уменьшается",
+        "Combat.IncomingFire у угрозы может вырасти",
+        "Combat.ThreatConfidence обновляется"
+      ]
+    },
+    "task.SuppressThreatBriefly": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_SuppressThreatBriefly",
+      "description": "Коротко подавляет угрозу, чтобы снизить риск движения. Ограничивается ammo и допустимой exposure.",
+      "cost": {
+        "base": 22,
+        "formula": "ammo_spend_penalty + exposure_penalty"
+      },
+      "effects": [
+        "Combat.CoverRouteRisk может снизиться для следующего шага движения",
+        "Weapon.AmmoInMag уменьшается"
+      ]
+    },
+    "task.UpdateThreatMemoryFromStimulus": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_UpdateThreatMemoryFromStimulus",
+      "description": "Создает Combat.SearchAnchor из общего подозрительного стимула, если более точные источники не подошли.",
+      "cost": {
+        "base": 3,
+        "formula": "uncertainty_penalty remains if stimulus is vague"
+      },
+      "effects": [
+        "Combat.SearchAnchor",
+        "Combat.ThreatLocation",
+        "Combat.ThreatConfidence",
+        "Combat.LKPAgeSec = 0"
+      ]
+    },
+    "task.HoldAngleAndScan": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_HoldAngleAndScan",
+      "description": "Держит безопасный угол на LKP/SearchAnchor и проверяет вероятные точки появления угрозы.",
+      "cost": {
+        "base": 20,
+        "formula": "time_cost + reappearance_risk_penalty"
+      },
+      "effects": [
+        "Combat.LOSQuality может увеличиться",
+        "Combat.ThreatConfidence может обновиться"
+      ]
+    },
+    "task.CautiousSearchStep": {
+      "kind": "custom_or_move_to",
+      "ue_class": "UTAHTNTask_CautiousSearchStep",
+      "description": "Делает один короткий cover-to-cover шаг к Combat.SearchAnchor или LKP. Gait выбирается отдельной task и влияет на time/cost.",
+      "cost": {
+        "base": 24,
+        "formula": "path_cost + exposure_penalty + uncertainty_penalty"
+      },
+      "reads": [
+        "Combat.SearchAnchor",
+        "Combat.CoverRouteRisk",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation меняется",
+        "Combat.LKPAgeSec увеличивается во время движения",
+        "Движение использует Agent.MovementGait"
+      ]
+    },
+    "task.ReloadWeapon": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_ReloadWeapon",
+      "description": "Перезаряжает активное оружие только в безопасном окне или когда лучших боевых вариантов нет.",
+      "cost": {
+        "base": 25,
+        "formula": "reload_time * time_cost + reload_vulnerability_penalty"
+      },
+      "reads": [
+        "Weapon.HasSpareMagazine",
+        "Weapon.SafeReloadWindow",
+        "Weapon.IsFiring"
+      ],
+      "effects": [
+        "Weapon.IsFiring = false",
+        "Weapon.FireIntent = None",
+        "Weapon.AmmoInMag = Weapon.MagCapacity",
+        "Weapon.HasSpareMagazine может уменьшиться",
+        "Weapon.AmmoPressure уменьшается, ammo-related decorators получают уведомление"
+      ],
+      "execution": "После перезарядки уведомить ammo-pressure/event decorators или запросить plan adjustment."
+    },
+    "task.SwitchToSidearm": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_SwitchToSidearm",
+      "description": "Быстро переключается на вторичное оружие, когда основное оружие пустое, а перезарядка небезопасна.",
+      "cost": {
+        "base": 12,
+        "formula": "switch_time * time_cost"
+      },
+      "reads": [
+        "Weapon.HasSidearmReady"
+      ],
+      "effects": [
+        "Активное оружие меняется",
+        "Weapon.AmmoInMag обновляется",
+        "Weapon.AmmoPressure пересчитывается для нового профиля оружия"
+      ],
+      "execution": "После switch weapon уведомить ammo-pressure/event decorators, чтобы planner мог вернуться к combat кандидат."
+    },
+    "task.ReturnToObjectiveAlerted": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_ReturnToObjectiveAlerted",
+      "description": "Возвращается к назначенной задаче с сохраненной настороженностью и памятью угрозы.",
+      "cost": {
+        "base": 20,
+        "formula": "path_cost + uncertainty_penalty"
+      },
+      "effects": [
+        "Planner.Focus = Objective"
+      ]
+    },
+    "task.SelectNextPatrolPoint": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_SelectNextPatrolPoint",
+      "description": "Выбирает следующую точку patrol route и пишет Objective.TargetLocation.",
+      "cost": {
+        "base": 4,
+        "formula": "route_progress_bias + squad_spacing_penalty"
+      },
+      "reads": [
+        "Objective.PatrolRoute",
+        "Objective.TargetLocation",
+        "Squad.MemberPositions"
+      ],
+      "effects": [
+        "Objective.TargetLocation = next patrol point",
+        "Planner.Focus = Patrol"
+      ]
+    },
+    "task.PatrolMoveToPoint": {
+      "kind": "custom_or_move_to",
+      "ue_class": "UTAHTNTask_PatrolMoveToPoint",
+      "description": "Двигается к Objective.TargetLocation обычным патрульным перемещением. Тактическое прерывание может прервать план.",
+      "cost": {
+        "base": 14,
+        "formula": "path_cost + formation_spacing_penalty"
+      },
+      "reads": [
+        "Objective.TargetLocation",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation приближается к Objective.TargetLocation"
+      ]
+    },
+    "task.MoveToGuardPost": {
+      "kind": "custom_or_move_to",
+      "ue_class": "UTAHTNTask_MoveToGuardPost",
+      "description": "Переходит к полезному guard post внутри Objective.GuardArea.",
+      "cost": {
+        "base": 12,
+        "formula": "path_cost + guard_coverage_penalty"
+      },
+      "reads": [
+        "Objective.GuardArea",
+        "Objective.TargetLocation",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation меняется",
+        "Planner.Focus = Guard"
+      ]
+    },
+    "task.GuardAreaObserve": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_GuardAreaObserve",
+      "description": "Наблюдает назначенный сектор и позволяет perception/stimulus services поднять тактическое прерывание.",
+      "cost": {
+        "base": 6,
+        "formula": "sector_blindness_penalty + fatigue_or_idle_penalty"
+      },
+      "reads": [
+        "Objective.GuardArea",
+        "Combat.StimulusLocation"
+      ],
+      "effects": [
+        "Planner.Focus = Guard",
+        "Agent.Posture = StandingOrCrouched"
+      ]
+    },
+    "task.MoveToInterestPoint": {
+      "kind": "custom_or_move_to",
+      "ue_class": "UTAHTNTask_MoveToInterestPoint",
+      "description": "Двигается к точке интереса без намерения стрелять немедленно. Tactical stimuli могут прервать план.",
+      "cost": {
+        "base": 16,
+        "formula": "path_cost + exposure_penalty_if_route_crosses_open_space"
+      },
+      "reads": [
+        "Objective.InterestPoint",
+        "Objective.TargetLocation",
+        "Agent.MovementGait"
+      ],
+      "effects": [
+        "SelfLocation приближается к Objective.TargetLocation",
+        "Planner.Focus = MoveToInterest"
+      ]
+    },
+    "task.HoldObjectivePosition": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_HoldObjectivePosition",
+      "description": "Удерживает текущую полезную позицию, пока нет более конкретной задачи или тактическое прерывание.",
+      "cost": {
+        "base": 10,
+        "formula": "idle_penalty + poor_sector_coverage_penalty"
+      },
+      "reads": [
+        "Objective.CurrentKind",
+        "Combat.StimulusLocation"
+      ],
+      "effects": [
+        "Planner.Focus = Objective",
+        "Agent.Posture = StandingOrCrouched"
+      ]
+    },
+    "task.UpdateThreatMemoryFromWeaponReport": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_UpdateThreatMemoryFromWeaponReport",
+      "description": "Превращает источник звука выстрела в SearchAnchor со средней уверенностью. Это не точная позиция угрозы.",
+      "cost": {
+        "base": 3,
+        "formula": "uncertainty_penalty + sound_occlusion_penalty"
+      },
+      "reads": [
+        "Combat.WeaponReportLocation",
+        "Combat.WeaponReportAgeSec",
+        "Combat.WeaponReportConfidence"
+      ],
+      "effects": [
+        "Combat.SearchAnchor = Combat.WeaponReportLocation",
+        "Combat.StimulusKind = WeaponReport",
+        "Combat.ThreatConfidence мягко увеличивается"
+      ]
+    },
+    "task.UpdateThreatMemoryFromImpactOrNearMiss": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_UpdateThreatMemoryFromImpactOrNearMiss",
+      "description": "Использует impact или near miss как признак входящего огня. Повышает danger и задает направление поиска, но не точную позицию стрелка.",
+      "cost": {
+        "base": 4,
+        "formula": "incoming_fire_risk + direction_uncertainty"
+      },
+      "reads": [
+        "Combat.BulletImpactLocation",
+        "Combat.BulletImpactAgeSec",
+        "Combat.NearMissDirection",
+        "Combat.NearMissAgeSec"
+      ],
+      "effects": [
+        "Combat.SearchAnchor = impact location или inferred direction probe",
+        "Combat.StimulusKind = BulletImpact/NearMiss",
+        "Combat.ExpectedDeathRisk увеличивается"
+      ]
+    },
+    "task.UpdateThreatMemoryFromAllyHitReaction": {
+      "kind": "custom",
+      "ue_class": "UTAHTNTask_UpdateThreatMemoryFromAllyHitReaction",
+      "description": "Реагирует на попадание, смерть или near miss союзника как на боевой сигнал даже без прямого восприятия стрелка.",
+      "cost": {
+        "base": 4,
+        "formula": "ally_down_priority + uncertainty_penalty"
+      },
+      "reads": [
+        "Squad.AllyUnderFire",
+        "Combat.AllyHitReactionLocation",
+        "Squad.AllyCasualtyLocation"
+      ],
+      "effects": [
+        "Combat.SearchAnchor = ally hit reaction/casualty location",
+        "Combat.StimulusKind = AllyHitReaction",
+        "Planner.Focus = Search"
+      ]
+    },
+    "task.Success": {
+      "kind": "built_in",
+      "ue_class": "UHTNTask_Success",
+      "description": "Мгновенно завершается успехом. Используется как нижняя ветка Prefer, когда действие опционально и не должно ломать внешний план.",
+      "cost": {
+        "base": 0
+      },
+      "effects": []
+    }
+  },
+  "htn_assets": {
+    "HTN.Humanoid.Root": {
+      "title": "Humanoid high-level behavior root",
+      "description": "Верхний HTN слой для обычных squad/agent задачаs. Combat root входит только как тактическое прерываниеion поверх patrol, guard или move-to-interest behavior.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Agent / squad behavior root",
+          "description": "Верхний уровень: обновляет факты задачи и восприятия, затем выбирает тактическое прерывание или обычную назначенную задачу.",
+          "services": [
+            "service.UpdateObjectiveFacts",
+            "service.UpdateThreatFacts",
+            "service.UpdateStimulusFacts",
+            "service.SquadFactSync",
+            "service.ReplanOnCombatFactChange"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 3
+          }
+        },
+        "prefer_tactical": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Тактическое прерывание",
+          "description": "Проверяет, нужно ли прервать patrol/guard/move из-за боевой ситуации.",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 1,
+            "lane": 3
+          },
+          "reads": [
+            "Combat.CriticalSurvivalNeeded",
+            "Combat.ThreatConfirmed",
+            "Combat.ThreatConfidence",
+            "Combat.StimulusAgeSec",
+            "Combat.LKPAgeSec",
+            "Squad.AllyUnderFire",
+            "Objective.CurrentKind"
+          ],
+          "branch_contract": {
+            "top": "Запускает HTN.HumanoidCombat.Root, если тактическое прерывание валиден.",
+            "bottom": "Продолжает назначенную задачу, если боевой план не строится."
+          },
+          "top_branch_rejected_when": [
+            "нет высокого риска смерти",
+            "нет подтвержденной угрозы",
+            "нет свежего боевого стимула или LKP",
+            "нет события Squad.AllyUnderFire"
+          ],
+          "replan_triggers": [
+            "боевой факт пересек порог поведения",
+            "появился или пропал подтвержденный контакт",
+            "стимул вошел в actionable-окно или устарел",
+            "изменился Squad.AllyUnderFire"
+          ],
+          "implementation_notes": "HTNNode_Prefer. Верхний child имеет decorator.TacticalInterruptionNeeded. Включить Try Switch To Higher Priority Ветка."
+        },
+        "tactical_interrupt": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "React to threat / stimulus",
+          "asset_ref": "HTN.HumanoidCombat.Root",
+          "decorators": [
+            "decorator.TacticalInterruptionNeeded"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 1
+          }
+        },
+        "prefer_objective": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Выбор назначенной задачи",
+          "description": "Выбирает текущую обычную задачу: patrol, guard, move-to-interest или hold.",
+          "layout": {
+            "col": 2,
+            "lane": 4
+          },
+          "reads": [
+            "Objective.CurrentKind",
+            "Objective.PatrolRoute",
+            "Objective.GuardArea",
+            "Objective.InterestPoint",
+            "Objective.TargetLocation"
+          ],
+          "branch_contract": {
+            "top": "Запускает patrol, если Objective.CurrentKind == PatrolRoute.",
+            "bottom": "Иначе проверяет guard, move-to-interest и hold."
+          },
+          "top_branch_rejected_when": [
+            "Objective.CurrentKind != PatrolRoute",
+            "Objective.PatrolRoute не задан"
+          ],
+          "replan_triggers": [
+            "изменился Objective.CurrentKind",
+            "изменились данные текущей задачи",
+            "тактическое прерывание стал валиден"
+          ],
+          "implementation_notes": "Это диспетчер assignment, а не cost comparison."
+        },
+        "patrol": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Patrol assigned route",
+          "asset_ref": "HTN.HumanoidObjective.Patrol",
+          "decorators": [
+            "decorator.HasPatrolObjective"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 2
+          }
+        },
+        "prefer_guard": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Охрана области",
+          "layout": {
+            "col": 3,
+            "lane": 4
+          },
+          "description": "Запускает guard-задачу, если patrol не назначен.",
+          "reads": [
+            "Objective.CurrentKind",
+            "Objective.GuardArea",
+            "Objective.GuardPost"
+          ],
+          "branch_contract": {
+            "top": "Запускает guard subnetwork.",
+            "bottom": "Иначе проверяет move-to-interest/hold."
+          },
+          "top_branch_rejected_when": [
+            "Objective.CurrentKind != GuardArea",
+            "Objective.GuardArea не задан"
+          ],
+          "replan_triggers": [
+            "изменился guard assignment",
+            "тактическое прерывание стал валиден"
+          ],
+          "implementation_notes": "Верхняя ветка должна иметь decorator.HasGuardObjective."
+        },
+        "guard": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Guard assigned area",
+          "asset_ref": "HTN.HumanoidObjective.GuardArea",
+          "decorators": [
+            "decorator.HasGuardObjective"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 3
+          }
+        },
+        "prefer_move_interest": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Переход к точке интереса",
+          "layout": {
+            "col": 4,
+            "lane": 5
+          },
+          "description": "Запускает move-to-interest, если нет patrol/guard задачи.",
+          "reads": [
+            "Objective.CurrentKind",
+            "Objective.InterestPoint",
+            "Objective.TargetLocation"
+          ],
+          "branch_contract": {
+            "top": "Запускает move-to-interest subnetwork.",
+            "bottom": "Если точки нет, выполняет HoldObjectivePosition."
+          },
+          "top_branch_rejected_when": [
+            "Objective.CurrentKind != MoveToInterestPoint",
+            "Objective.InterestPoint и Objective.TargetLocation не заданы"
+          ],
+          "replan_triggers": [
+            "изменился target point",
+            "тактическое прерывание стал валиден"
+          ],
+          "implementation_notes": "Последняя конкретная задача ветка перед HoldObjectivePosition."
+        },
+        "move_interest": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Move to interest point",
+          "asset_ref": "HTN.HumanoidObjective.MoveToInterest",
+          "decorators": [
+            "decorator.HasMoveToInterestObjective"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 4
+          }
+        },
+        "hold_position": {
+          "type": "task",
+          "task_ref": "task.HoldObjectivePosition",
+          "title": "Hold objective position",
+          "description": "Удерживает текущую полезную позицию, если нет конкретной назначенной задачи.",
+          "layout": {
+            "col": 5,
+            "lane": 6
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_tactical"
+        },
+        {
+          "from": "prefer_tactical",
+          "to": "tactical_interrupt",
+          "branch": "top: tactical interrupt"
+        },
+        {
+          "from": "prefer_tactical",
+          "to": "prefer_objective",
+          "branch": "bottom: continue objective"
+        },
+        {
+          "from": "prefer_objective",
+          "to": "patrol",
+          "branch": "top: patrol objective"
+        },
+        {
+          "from": "prefer_objective",
+          "to": "prefer_guard",
+          "branch": "bottom: not patrol"
+        },
+        {
+          "from": "prefer_guard",
+          "to": "guard",
+          "branch": "top: guard objective"
+        },
+        {
+          "from": "prefer_guard",
+          "to": "prefer_move_interest",
+          "branch": "bottom: not guard"
+        },
+        {
+          "from": "prefer_move_interest",
+          "to": "move_interest",
+          "branch": "top: move-to-interest objective"
+        },
+        {
+          "from": "prefer_move_interest",
+          "to": "hold_position",
+          "branch": "bottom: no objective details"
+        }
+      ]
+    },
+    "HTN.HumanoidObjective.Patrol": {
+      "title": "Objective: patrol route",
+      "description": "Обычный non-combat patrol. Perception services могут принудить тактическое прерывание, если появляется threat, shot, impact, near miss или ally-hit reaction.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Patrol root",
+          "services": [
+            "service.UpdateObjectiveFacts",
+            "service.UpdateStimulusFacts",
+            "service.SquadFactSync"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 1
+          }
+        },
+        "select_point": {
+          "type": "task",
+          "task_ref": "task.SelectNextPatrolPoint",
+          "title": "Select next patrol point",
+          "layout": {
+            "col": 1,
+            "lane": 1
+          }
+        },
+        "jog_to_point": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set patrol pace",
+          "layout": {
+            "col": 2,
+            "lane": 1
+          }
+        },
+        "move_point": {
+          "type": "task",
+          "task_ref": "task.PatrolMoveToPoint",
+          "title": "Move to patrol point",
+          "layout": {
+            "col": 3,
+            "lane": 1
+          }
+        },
+        "observe": {
+          "type": "task",
+          "task_ref": "task.GuardAreaObserve",
+          "title": "Observe while patrolling",
+          "layout": {
+            "col": 4,
+            "lane": 1
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "select_point"
+        },
+        {
+          "from": "select_point",
+          "to": "jog_to_point"
+        },
+        {
+          "from": "jog_to_point",
+          "to": "move_point"
+        },
+        {
+          "from": "move_point",
+          "to": "observe"
+        }
+      ]
+    },
+    "HTN.HumanoidObjective.GuardArea": {
+      "title": "Objective: guard area",
+      "description": "Обычное guard behavior: занять полезный post, наблюдать sectors и позволить tactical stimuli прерывать план, а не прятать combat внутри guard tasks.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Guard root",
+          "services": [
+            "service.UpdateObjectiveFacts",
+            "service.UpdateStimulusFacts",
+            "service.SquadFactSync"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 2
+          }
+        },
+        "prefer_post": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Нужен другой guard post?",
+          "layout": {
+            "col": 1,
+            "lane": 2
+          },
+          "description": "Проверяет, даст ли новый guard post лучший сектор наблюдения или меньший риск.",
+          "reads": [
+            "Objective.GuardPost",
+            "Objective.GuardArea",
+            "Combat.CoverRouteRisk",
+            "Objective.GuardPostExposure",
+            "Objective.GuardSectorCoverageScore",
+            "Planner.TacticalInterruptionNeeded"
+          ],
+          "branch_contract": {
+            "top": "Переходит на новый post, если он заметно полезнее и путь приемлем.",
+            "bottom": "Остается на месте, если текущий post достаточно хорош."
+          },
+          "top_branch_rejected_when": [
+            "нет полезного guard post",
+            "путь к post опасен или дорог",
+            "новый post не дает достаточного улучшения"
+          ],
+          "replan_triggers": [
+            "изменился guard area assignment",
+            "изменились sector coverage/risk",
+            "появился тактическое прерывание"
+          ],
+          "implementation_notes": "MoveToGuardPost генерирует кандидатов и пишет выбранный GuardPost в worldstate."
+        },
+        "jog_post": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set guard movement pace",
+          "layout": {
+            "col": 2,
+            "lane": 1
+          }
+        },
+        "move_post": {
+          "type": "task",
+          "task_ref": "task.MoveToGuardPost",
+          "title": "Move to guard post",
+          "layout": {
+            "col": 3,
+            "lane": 1
+          }
+        },
+        "observe": {
+          "type": "task",
+          "task_ref": "task.GuardAreaObserve",
+          "title": "Observe guard sector",
+          "layout": {
+            "col": 2,
+            "lane": 3
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_post"
+        },
+        {
+          "from": "prefer_post",
+          "to": "jog_post",
+          "branch": "top: better guard post exists"
+        },
+        {
+          "from": "jog_post",
+          "to": "move_post"
+        },
+        {
+          "from": "move_post",
+          "to": "observe"
+        },
+        {
+          "from": "prefer_post",
+          "to": "observe",
+          "branch": "bottom: current post is fine"
+        }
+      ]
+    },
+    "HTN.HumanoidObjective.MoveToInterest": {
+      "title": "Objective: move to interest point",
+      "description": "Обычное движение к point of interest. Если появляется hostile evidence, high-level root должен переключиться в тактическое прерывание.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Move-to-interest root",
+          "services": [
+            "service.UpdateObjectiveFacts",
+            "service.UpdateStimulusFacts",
+            "service.SquadFactSync"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 1
+          }
+        },
+        "jog_interest": {
+          "type": "task",
+          "task_ref": "task.SetGaitJog",
+          "title": "Set travel pace",
+          "layout": {
+            "col": 1,
+            "lane": 1
+          }
+        },
+        "move_interest": {
+          "type": "task",
+          "task_ref": "task.MoveToInterestPoint",
+          "title": "Move to point of interest",
+          "layout": {
+            "col": 2,
+            "lane": 1
+          }
+        },
+        "hold_interest": {
+          "type": "task",
+          "task_ref": "task.HoldObjectivePosition",
+          "title": "Hold at interest point",
+          "layout": {
+            "col": 3,
+            "lane": 1
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "jog_interest"
+        },
+        {
+          "from": "jog_interest",
+          "to": "move_interest"
+        },
+        {
+          "from": "move_interest",
+          "to": "hold_interest"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.Root": {
+      "title": "Humanoid combat root",
+      "description": "Верхняя приоритетная цепочка боя. Выживание проверяется перед подтвержденным контактом, поиском потерянного контакта и возвратом к задаче. Ammo recovery обрабатывается внутри активного боевого контекста.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Combat choice root",
+          "description": "Боевой уровень: выживание, подтвержденный контакт, поиск потерянного контакта или возврат к задаче.",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.UpdateStimulusFacts",
+            "service.UpdateAmmoPressure",
+            "service.SquadFactSync",
+            "service.ReplanOnCombatFactChange"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 2
+          }
+        },
+        "prefer_survival": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Срочно выжить",
+          "description": "Запускает survival только при высоком краткосрочном риске смерти.",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 1,
+            "lane": 2
+          },
+          "reads": [
+            "Combat.CriticalSurvivalNeeded",
+            "Combat.ExpectedDeathRisk",
+            "Combat.IncomingFire",
+            "Agent.HealthState",
+            "Combat.ExplosiveRisk",
+            "Combat.CoverRouteRisk"
+          ],
+          "branch_contract": {
+            "top": "Запускает SurviveImmediateThreat при CriticalSurvivalNeeded.",
+            "bottom": "Иначе переходит к подтвержденный контакт, search или задача alert."
+          },
+          "top_branch_rejected_when": [
+            "CriticalSurvivalNeeded false",
+            "ExpectedDeathRisk ниже порога",
+            "IncomingFire/ExplosiveRisk неактивны",
+            "ранение есть, но позиция уже достаточно безопасна"
+          ],
+          "replan_triggers": [
+            "изменился CriticalSurvivalNeeded",
+            "укрытие или stance снизили риск",
+            "изменился HealthState",
+            "incoming fire пропал или усилился"
+          ],
+          "implementation_notes": "HTNNode_Prefer. Выживание перебивает бой только при CriticalSurvivalNeeded."
+        },
+        "survive": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Survive immediate threat",
+          "asset_ref": "HTN.HumanoidCombat.SurviveImmediateThreat",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded"
+          ],
+          "cost": {
+            "base": 0,
+            "note": "Cost SubNetwork берется из вложенных plan steps."
+          },
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "prefer_confirmed": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Угроза подтверждена?",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 2,
+            "lane": 2
+          },
+          "description": "Проверяет, можно ли строить бой с подтвержденной угрозой.",
+          "reads": [
+            "Combat.ThreatConfirmed",
+            "Combat.ThreatConfidence",
+            "Combat.LOSQuality",
+            "Combat.LKPAgeSec",
+            "Combat.ThreatLocation",
+            "Weapon.AmmoPressure",
+            "Combat.SelectedCover"
+          ],
+          "branch_contract": {
+            "top": "Запускает ConfirmedContact при decorator.ThreatConfirmed.",
+            "bottom": "Иначе переходит к lost-contact/stimulus handling."
+          },
+          "top_branch_rejected_when": [
+            "ThreatConfirmed false",
+            "нет direct LOS",
+            "LKP устарела",
+            "ThreatConfidence ниже 0.58"
+          ],
+          "replan_triggers": [
+            "изменился LOS bucket",
+            "ThreatConfidence пересек 0.58",
+            "LKP устарела",
+            "ThreatLocation значимо сместилась"
+          ],
+          "implementation_notes": "ThreatConfirmed должен использовать пороги, а не микродвижения ThreatLocation."
+        },
+        "confirmed_contact": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Handle confirmed contact",
+          "asset_ref": "HTN.HumanoidCombat.ConfirmedContact",
+          "decorators": [
+            "decorator.ThreatConfirmed"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 1
+          }
+        },
+        "prefer_lost": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Есть свежий след угрозы?",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 3,
+            "lane": 3
+          },
+          "description": "Выбирает осторожный поиск по LKP/стимулу или возврат к задаче.",
+          "reads": [
+            "Combat.StimulusLocation",
+            "Combat.StimulusAgeSec",
+            "Combat.LKPAgeSec",
+            "Combat.SearchAnchor",
+            "Combat.AllyHitReactionAgeSec"
+          ],
+          "branch_contract": {
+            "top": "Запускает LostContact при полезный стимул или LKP.",
+            "bottom": "Возвращает агента к задаче в alerted-состоянии."
+          },
+          "top_branch_rejected_when": [
+            "нет свежего StimulusLocation",
+            "нет свежего LKP/SearchAnchor",
+            "stimulus устарел",
+            "direct contact снова confirmed"
+          ],
+          "replan_triggers": [
+            "новый weapon report / impact / near miss / ally hit",
+            "stimulus устарел",
+            "direct contact стал confirmed"
+          ],
+          "implementation_notes": "Поиск обязан иметь TTL и confidence threshold."
+        },
+        "lost_contact": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Handle lost contact or sound",
+          "asset_ref": "HTN.HumanoidCombat.LostContact",
+          "decorators": [
+            "decorator.HasActionableStimulusOrLKP"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 2
+          }
+        },
+        "objective": {
+          "type": "task",
+          "task_ref": "task.ReturnToObjectiveAlerted",
+          "title": "Continue objective alerted",
+          "description": "Возврат к назначенной задаче, когда боевых оснований для action больше нет.",
+          "cost": {
+            "base": 20
+          },
+          "layout": {
+            "col": 5,
+            "lane": 3
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_survival",
+          "label": "start"
+        },
+        {
+          "from": "prefer_survival",
+          "to": "survive",
+          "branch": "top: survival valid"
+        },
+        {
+          "from": "prefer_survival",
+          "to": "prefer_confirmed",
+          "branch": "bottom: no immediate survival plan"
+        },
+        {
+          "from": "prefer_confirmed",
+          "to": "confirmed_contact",
+          "branch": "top: confirmed threat"
+        },
+        {
+          "from": "prefer_confirmed",
+          "to": "prefer_lost",
+          "branch": "bottom"
+        },
+        {
+          "from": "prefer_lost",
+          "to": "lost_contact",
+          "branch": "top: actionable stimulus or LKP"
+        },
+        {
+          "from": "prefer_lost",
+          "to": "objective",
+          "branch": "bottom: no actionable contact"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.SurviveImmediateThreat": {
+      "title": "Survive immediate threat",
+      "description": "Short-horizon survival plans для incoming fire, exposed lethal positions, severe wounds или высокого death risk.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Survival root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 2
+          }
+        },
+        "prefer_cover": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Есть безопасное укрытие?",
+          "description": "Сначала пробует укрытие, но только если путь к нему переживаемый.",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 1,
+            "lane": 2
+          },
+          "reads": [
+            "Combat.SelectedCover",
+            "Combat.CoverRouteRisk",
+            "Combat.ExpectedDeathRisk",
+            "Agent.Mobility",
+            "Combat.IncomingFire"
+          ],
+          "branch_contract": {
+            "top": "FindSafeCover, ReserveCover и MoveToSelectedCover строятся только для viable cover route.",
+            "bottom": "Если route невалиден, пробует local LOS break, затем suppress-then-move."
+          },
+          "top_branch_rejected_when": [
+            "нет полезного cover кандидат",
+            "CoverRouteRisk выше порога",
+            "ValidateCoverRoute вернул inвалиден",
+            "CriticalSurvivalNeeded стал false"
+          ],
+          "replan_triggers": [
+            "cover claim стал inвалиден",
+            "маршрут заблокирован",
+            "ExpectedDeathRisk или IncomingFire изменились",
+            "угроза сместилась и cover больше не закрывает LOS"
+          ],
+          "implementation_notes": "FindSafeCover/ValidateCoverRoute оценивают маршрут. Одного факта наличия укрытия недостаточно."
+        },
+        "find_cover": {
+          "type": "task",
+          "task_ref": "task.FindSafeCover",
+          "title": "Find safe cover candidates",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "reserve_cover": {
+          "type": "task",
+          "task_ref": "task.ReserveCover",
+          "title": "Reserve selected cover",
+          "decorators": [
+            "decorator.HasSafeCoverCandidate"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "move_cover": {
+          "type": "task",
+          "task_ref": "task.MoveToSelectedCover",
+          "title": "Move to selected cover",
+          "decorators": [
+            "decorator.CoverRouteAcceptable"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "stop_fire_for_cover_sprint": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop fire before fast move",
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "sprint_to_cover": {
+          "type": "task",
+          "task_ref": "task.SetGaitSprint",
+          "title": "Fast move to cover",
+          "decorators": [
+            "decorator.SprintAllowedNoImmediateFire"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 1
+          }
+        },
+        "enter_cover": {
+          "type": "task",
+          "task_ref": "task.EnterCoverStance",
+          "title": "Enter cover stance",
+          "decorators": [
+            "decorator.NoGrenadeOrImmediateFlush"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        },
+        "wait_cover": {
+          "type": "task",
+          "task_ref": "task.WaitInCoverReassess",
+          "title": "Wait in cover and reassess",
+          "decorators": [
+            "decorator.NoGrenadeOrImmediateFlush"
+          ],
+          "layout": {
+            "col": 7,
+            "lane": 0
+          }
+        },
+        "prefer_break_los": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Можно разорвать LOS рядом?",
+          "layout": {
+            "col": 2,
+            "lane": 2
+          },
+          "description": "Пробует короткое локальное смещение, если путь к полноценному укрытию слишком опасен.",
+          "reads": [
+            "Combat.LocalLOSBreakOffset",
+            "Combat.LOSQuality",
+            "Combat.ExpectedDeathRisk",
+            "Agent.Mobility"
+          ],
+          "branch_contract": {
+            "top": "Выполняет короткое смещение, если оно снижает LOS/risk.",
+            "bottom": "Если смещение невозможно, пробует suppress-then-move или ReduceExposureInPlace."
+          },
+          "top_branch_rejected_when": [
+            "нет короткого offset, который снижает LOS/risk",
+            "CriticalSurvivalNeeded false",
+            "movement blocked"
+          ],
+          "replan_triggers": [
+            "изменилось LOSQuality",
+            "изменился ExpectedDeathRisk",
+            "local nav offset стал inвалиден"
+          ],
+          "implementation_notes": "BreakLOSLateral - короткий step, а не sprint к дальнему укрытию."
+        },
+        "break_los": {
+          "type": "task",
+          "task_ref": "task.BreakLOSLateral",
+          "title": "Break LOS lateral",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 2
+          }
+        },
+        "jog_break_los": {
+          "type": "task",
+          "task_ref": "task.SetGaitJog",
+          "title": "Short LOS-break move",
+          "layout": {
+            "col": 3,
+            "lane": 2
+          }
+        },
+        "reduce_exposure": {
+          "type": "task",
+          "task_ref": "task.ReduceExposureInPlace",
+          "title": "Reduce exposure in place",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 2
+          }
+        },
+        "prefer_suppress_move": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Поможет подавление?",
+          "description": "Использует короткое подавление, чтобы пройти рискованный маршрут к укрытию.",
+          "layout": {
+            "col": 3,
+            "lane": 4
+          },
+          "reads": [
+            "Weapon.CanFire",
+            "Weapon.AmmoInMag",
+            "Combat.SuppressibleCoverRoute",
+            "Combat.ExpectedSuppressionRouteRisk",
+            "Combat.CoverRouteRisk"
+          ],
+          "branch_contract": {
+            "top": "Ищет suppressible route, затем Parallel: основное оружие movement, secondary suppressive fire.",
+            "bottom": "ReduceExposureInPlace, если suppress route или огонь невозможны."
+          },
+          "top_branch_rejected_when": [
+            "WeaponCanFire false",
+            "AmmoInMag <= 0",
+            "нет route с приемлемым ExpectedSuppressionRouteRisk",
+            "route остается слишком опасным даже под suppression"
+          ],
+          "replan_triggers": [
+            "Ammo упал до 0",
+            "route risk изменился",
+            "suppression больше не снижает risk"
+          ],
+          "implementation_notes": "Нужен decorator.SuppressibleCoverRoute. Без ammo/LOS эта ветка невалидна."
+        },
+        "parallel_suppress_move": {
+          "type": "structural",
+          "ue_class": "HTNNode_Parallel",
+          "title": "Parallel: move while suppressing",
+          "description": "Основная ветка движется к укрытию, вторичная подавляет угрозу до завершения движения.",
+          "decorators": [
+            "decorator.WeaponCanFire",
+            "decorator.SuppressibleCoverRoute"
+          ],
+          "parallel": {
+            "primary": "move_cover",
+            "secondary": "aim_suppress",
+            "wait_for_secondary": false,
+            "loop_secondary_until_primary_completes": true
+          },
+          "layout": {
+            "col": 6,
+            "lane": 4
+          }
+        },
+        "walk_suppress_move": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set fire movement pace",
+          "layout": {
+            "col": 5,
+            "lane": 4
+          }
+        },
+        "aim_suppress": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Aim before suppressing",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 7,
+            "lane": 5
+          }
+        },
+        "start_suppress": {
+          "type": "task",
+          "task_ref": "task.StartSuppressiveFire",
+          "title": "Start suppressive fire",
+          "decorators": [
+            "decorator.WeaponCanFire",
+            "decorator.CanExposeForShot",
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 8,
+            "lane": 5
+          }
+        },
+        "stop_suppress": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop suppressive fire",
+          "layout": {
+            "col": 9,
+            "lane": 5
+          }
+        },
+        "find_suppress_cover": {
+          "type": "task",
+          "task_ref": "task.FindSafeCover",
+          "title": "Find suppressible cover route",
+          "description": "Ищет маршрут, который становится приемлемым только под коротким подавлением.",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded",
+            "decorator.WeaponCanFire"
+          ],
+          "cost": {
+            "base": 12,
+            "formula": "query_cost + suppressed_route_risk_penalty + ammo_spend_penalty",
+            "note": "Используется только для suppress-then-move запасной вариант; обычный safe cover route пробуется первым."
+          },
+          "layout": {
+            "col": 4,
+            "lane": 4
+          }
+        },
+        "move_suppressed_cover": {
+          "type": "task",
+          "task_ref": "task.MoveToSelectedCover",
+          "title": "Move under suppression to cover",
+          "description": "Двигается по suppressible route, выбранному именно для этой запасной вариант-ветки.",
+          "decorators": [
+            "decorator.SuppressibleCoverRoute"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "cost": {
+            "base": 8,
+            "formula": "path_cost + suppressed_route_risk_penalty + ammo_spend_penalty",
+            "note": "Риск выше обычного cover movement, но plan валиден, когда suppression делает route переживаемым."
+          },
+          "layout": {
+            "col": 7,
+            "lane": 4
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_cover"
+        },
+        {
+          "from": "prefer_cover",
+          "to": "find_cover",
+          "branch": "top: safe cover exists"
+        },
+        {
+          "from": "find_cover",
+          "to": "reserve_cover",
+          "order": 1
+        },
+        {
+          "from": "reserve_cover",
+          "to": "stop_fire_for_cover_sprint",
+          "order": 2
+        },
+        {
+          "from": "stop_fire_for_cover_sprint",
+          "to": "sprint_to_cover",
+          "order": 3
+        },
+        {
+          "from": "sprint_to_cover",
+          "to": "move_cover",
+          "order": 4
+        },
+        {
+          "from": "move_cover",
+          "to": "enter_cover",
+          "order": 5
+        },
+        {
+          "from": "enter_cover",
+          "to": "wait_cover",
+          "order": 6
+        },
+        {
+          "from": "prefer_cover",
+          "to": "prefer_break_los",
+          "branch": "bottom: no safe cover route"
+        },
+        {
+          "from": "prefer_break_los",
+          "to": "jog_break_los",
+          "branch": "top: short lateral move works"
+        },
+        {
+          "from": "jog_break_los",
+          "to": "break_los",
+          "order": 1
+        },
+        {
+          "from": "break_los",
+          "to": "reduce_exposure",
+          "order": 2
+        },
+        {
+          "from": "prefer_break_los",
+          "to": "prefer_suppress_move",
+          "branch": "bottom"
+        },
+        {
+          "from": "prefer_suppress_move",
+          "to": "find_suppress_cover",
+          "branch": "top: suppressible route exists"
+        },
+        {
+          "from": "walk_suppress_move",
+          "to": "parallel_suppress_move",
+          "order": 2
+        },
+        {
+          "from": "parallel_suppress_move",
+          "to": "move_suppressed_cover",
+          "branch": "primary"
+        },
+        {
+          "from": "parallel_suppress_move",
+          "to": "aim_suppress",
+          "branch": "secondary loop"
+        },
+        {
+          "from": "aim_suppress",
+          "to": "start_suppress",
+          "order": 1
+        },
+        {
+          "from": "start_suppress",
+          "to": "stop_suppress",
+          "order": 2
+        },
+        {
+          "from": "prefer_suppress_move",
+          "to": "reduce_exposure",
+          "branch": "bottom: last short fallback"
+        },
+        {
+          "from": "find_suppress_cover",
+          "to": "walk_suppress_move",
+          "order": 1
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.ConfirmedContact": {
+      "title": "Handle confirmed contact",
+      "description": "Планирует бой с видимой или надежно подтвержденной угрозой: строит несколько допустимых тактических кандидатов и выбирает план с минимальной суммарной стоимостью риска.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Confirmed contact root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.UpdateAmmoPressure",
+            "service.ReplanIfThreatLocationChanges"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 2
+          }
+        },
+        "find_close_cover": {
+          "type": "task",
+          "task_ref": "task.FindSafeCover",
+          "title": "Find nearest fighting cover",
+          "decorators": [
+            "decorator.CloseThreatRequiresImmediateFight"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 0
+          },
+          "cost": {
+            "base": 8,
+            "formula": "close_threat_bonus_as_cost_reduction + path_cost + CoverRouteRisk * exposure_penalty + reappearance_penalty",
+            "note": "Кандидат отклоняется decorator, если threat недостаточно close/aware для immediate запасной вариант."
+          }
+        },
+        "parallel_close_fight": {
+          "type": "structural",
+          "ue_class": "HTNNode_Parallel",
+          "title": "Parallel: fight while falling back",
+          "description": "Двигается к ближайшему cover и, если возможно, отвечает огнем во время отхода.",
+          "decorators": [],
+          "parallel": {
+            "primary": "move_close_cover",
+            "secondary": "prefer_close_fire",
+            "wait_for_secondary": false,
+            "loop_secondary_until_primary_completes": true
+          },
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "walk_close_fight": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set close-fight pace",
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "move_close_cover": {
+          "type": "task",
+          "task_ref": "task.MoveToSelectedCover",
+          "title": "Move to nearest cover",
+          "decorators": [
+            "decorator.CoverRouteAcceptable"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "suppress_close": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Aim while falling back",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 1
+          }
+        },
+        "start_close_fire": {
+          "type": "task",
+          "task_ref": "task.StartSuppressiveFire",
+          "title": "Start fire while falling back",
+          "decorators": [
+            "decorator.WeaponCanFire",
+            "decorator.CanExposeForShot",
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 7,
+            "lane": 1
+          }
+        },
+        "stop_close_fire": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop fire after fallback",
+          "layout": {
+            "col": 8,
+            "lane": 1
+          }
+        },
+        "enter_close_cover": {
+          "type": "task",
+          "task_ref": "task.EnterCoverStance",
+          "title": "Enter close cover stance",
+          "decorators": [
+            "decorator.NoGrenadeOrImmediateFlush"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        },
+        "combat_ammo": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Recover weapon while contact remains confirmed",
+          "asset_ref": "HTN.HumanoidCombat.ManageAmmo",
+          "decorators": [
+            "decorator.NeedsCombatAmmoAction"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 5
+          },
+          "cost": {
+            "base": 14,
+            "formula": "ammo_depletion_risk_penalty + reload_or_switch_plan_cost + exposure_penalty",
+            "note": "Соревнуется с direct fire и repositioning, когда current weapon скоро сделает выбранный combat plan невалидным."
+          }
+        },
+        "stalk_ambush": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Stalk to covered attack position",
+          "asset_ref": "HTN.HumanoidCombat.StalkForAmbush",
+          "decorators": [
+            "decorator.CanStalkCloser"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 6
+          },
+          "cost": {
+            "base": 18,
+            "formula": "approach_path_cost + premature_reveal_penalty + distance_mismatch_penalty - covered_ambush_bonus",
+            "note": "Валиден только пока threat, вероятно, не знает об этом agent/squad."
+          }
+        },
+        "peek": {
+          "type": "task",
+          "task_ref": "task.PeekAndSampleLOS",
+          "title": "Peek and sample LOS",
+          "layout": {
+            "col": 2,
+            "lane": 2
+          }
+        },
+        "walk_for_burst": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set fire movement pace",
+          "layout": {
+            "col": 3,
+            "lane": 2
+          }
+        },
+        "aim_burst": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Aim weapon at threat",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 2
+          }
+        },
+        "burst": {
+          "type": "task",
+          "task_ref": "task.StartControlledFire",
+          "title": "Start controlled fire",
+          "decorators": [
+            "decorator.ThreatConfirmed",
+            "decorator.WeaponCanFire",
+            "decorator.CanExposeForShot",
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 2
+          }
+        },
+        "stop_burst": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop controlled fire",
+          "layout": {
+            "col": 6,
+            "lane": 2
+          }
+        },
+        "wait_reassess": {
+          "type": "task",
+          "task_ref": "task.WaitInCoverReassess",
+          "title": "Recover and reassess",
+          "layout": {
+            "col": 7,
+            "lane": 2
+          }
+        },
+        "find_firing": {
+          "type": "task",
+          "task_ref": "task.FindFiringPosition",
+          "title": "Find survivable firing position",
+          "layout": {
+            "col": 2,
+            "lane": 3
+          },
+          "cost": {
+            "base": 10,
+            "formula": "path_cost + route_risk_penalty + exposure_penalty + uncertainty_penalty + ammo_depletion_risk_penalty - safer_angle_bonus",
+            "note": "Соревнуется с direct covered fire и ammo recovery; невалиден, когда active weapon не может стрелять."
+          },
+          "decorators": [
+            "decorator.WeaponCanFire"
+          ],
+          "description": "Ищет более безопасный огневой угол. Пустое оружие должно увести план в ammo recovery."
+        },
+        "move_firing": {
+          "type": "task",
+          "task_ref": "task.MoveToFiringPosition",
+          "title": "Move to firing position",
+          "decorators": [
+            "decorator.CoverRouteAcceptable"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 3
+          }
+        },
+        "jog_to_firing": {
+          "type": "task",
+          "task_ref": "task.SetGaitJog",
+          "title": "Move toward firing position",
+          "layout": {
+            "col": 3,
+            "lane": 3
+          }
+        },
+        "subplan_shoot_move": {
+          "type": "subplan",
+          "ue_class": "HTNTask_SubPlan",
+          "title": "SubPlan: opportunistic fire from new angle",
+          "description": "Пробует короткое окно огня после смены угла, не ломая внешний reposition plan.",
+          "asset_ref": "HTN.HumanoidCombat.FireOpportunity",
+          "settings": {
+            "PlanDuringOuterPlanPlanning": true,
+            "PlanDuringExecution": true,
+            "SkipPlanningOnFirstExecutionIfPlanAlreadyAvailable": true,
+            "OnSubPlanSucceeded": "Succeed",
+            "OnSubPlanFailed": "Succeed",
+            "OnThisNodeAborted": "AbortSubPlanExecution"
+          },
+          "layout": {
+            "col": 5,
+            "lane": 3
+          }
+        },
+        "fallback_survive": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Fallback to survival",
+          "asset_ref": "HTN.HumanoidCombat.SurviveImmediateThreat",
+          "decorators": [
+            "decorator.CriticalSurvivalNeeded"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 7
+          },
+          "cost": {
+            "base": 30,
+            "formula": "expected_death_risk_penalty - immediate_survival_gain_as_cost_avoidance",
+            "note": "Запасной вариант кандидат, когда обычные combat plans невалидны или слишком дорогие."
+          }
+        },
+        "prefer_close_fire": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Можно стрелять при отходе?",
+          "description": "Делает огонь при отходе опциональным: если стрелять нельзя, движение к укрытию продолжается.",
+          "layout": {
+            "col": 5,
+            "lane": 1
+          },
+          "reads": [
+            "Weapon.CanFire",
+            "Combat.CanExposeForShot",
+            "Agent.CanFireInCurrentGait",
+            "Combat.LOSQuality",
+            "Weapon.AmmoInMag"
+          ],
+          "branch_contract": {
+            "top": "Aim и StartSuppressiveFire строятся при WeaponCanFire, CanExposeForShot и NotSprintingForFire.",
+            "bottom": "task.Success, если fire невозможен."
+          },
+          "top_branch_rejected_when": [
+            "WeaponCanFire false",
+            "CanExposeForShot false",
+            "ammo упал до 0",
+            "LOS стал inвалиден",
+            "gait не допускает огонь"
+          ],
+          "replan_triggers": [
+            "изменились ammo/LOS/exposure",
+            "основное оружие retreat завершился",
+            "угроза больше не close/aware"
+          ],
+          "implementation_notes": "HTNNode_Prefer с task.Success в нижней ветке. Не ставить WeaponCanFire на родительский Parallel."
+        },
+        "no_close_fire": {
+          "type": "task",
+          "task_ref": "task.Success",
+          "title": "Skip fire while falling back",
+          "description": "Огонь при отходе невозможен; вторичная ветка успешно завершается, чтобы не блокировать движение.",
+          "layout": {
+            "col": 6,
+            "lane": 4
+          }
+        },
+        "choose_combat_plan": {
+          "type": "structural",
+          "ue_class": "UTAHTNNode_CostChoice",
+          "title": "Choose lowest-risk confirmed-contact plan",
+          "description": "Строит допустимые боевые варианты и выбирает минимальную суммарную стоимость.",
+          "choice_mode": "lowest_total_plan_cost",
+          "candidates": [
+            {
+              "branch": "close_fallback",
+              "start_node": "find_close_cover",
+              "intent": "Threat is close/aware, so retreat toward nearby cover while firing only if that optional branch is valid.",
+              "cost_bias": "Low when distance is close, threat is facing/aware, route risk is acceptable, and cover is nearby."
+            },
+            {
+              "branch": "ammo_recovery",
+              "start_node": "combat_ammo",
+              "intent": "Recover weapon readiness before continuing direct fire when ammo pressure makes current combat plan brittle.",
+              "cost_bias": "Low when ammo pressure is high, reload/switch window is safe, and current position can survive the recovery action."
+            },
+            {
+              "branch": "unseen_approach",
+              "start_node": "stalk_ambush",
+              "intent": "If the threat likely does not know about the squad and is far enough, move to a covered attack position before revealing.",
+              "cost_bias": "Low when approach route is covered, reveal risk is low, and current distance makes long-range fire unattractive."
+            },
+            {
+              "branch": "covered_fire",
+              "start_node": "peek",
+              "intent": "Probe LOS, then fire a short controlled window from cover if ammo, gait, LOS, and exposure remain valid.",
+              "cost_bias": "Low when current position has good cover, short exposure, valid LOS, and enough ammo for the expected burst."
+            },
+            {
+              "branch": "safer_angle",
+              "start_node": "find_firing",
+              "intent": "Reposition to a more survivable firing angle when direct exposure is too expensive but contact remains useful.",
+              "cost_bias": "Low when a nearby firing position improves cover/LOS enough to justify movement risk."
+            },
+            {
+              "branch": "survival_fallback",
+              "start_node": "fallback_survive",
+              "intent": "Return to immediate survival if all normal combat candidates are too risky or invalid.",
+              "cost_bias": "Only attractive when current death risk dominates normal combat goals."
+            }
+          ],
+          "layout": {
+            "col": 1,
+            "lane": 2
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "choose_combat_plan"
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "find_close_cover",
+          "branch": "candidate: close fallback"
+        },
+        {
+          "from": "find_close_cover",
+          "to": "walk_close_fight",
+          "order": 1
+        },
+        {
+          "from": "walk_close_fight",
+          "to": "parallel_close_fight",
+          "order": 2
+        },
+        {
+          "from": "parallel_close_fight",
+          "to": "move_close_cover",
+          "branch": "primary"
+        },
+        {
+          "from": "parallel_close_fight",
+          "to": "prefer_close_fire",
+          "branch": "secondary loop"
+        },
+        {
+          "from": "suppress_close",
+          "to": "start_close_fire",
+          "order": 1
+        },
+        {
+          "from": "start_close_fire",
+          "to": "stop_close_fire",
+          "order": 2
+        },
+        {
+          "from": "move_close_cover",
+          "to": "enter_close_cover",
+          "order": 1
+        },
+        {
+          "from": "prefer_close_fire",
+          "to": "suppress_close",
+          "branch": "top: fire opportunity"
+        },
+        {
+          "from": "prefer_close_fire",
+          "to": "no_close_fire",
+          "branch": "bottom: no fire opportunity"
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "peek",
+          "branch": "candidate: covered fire"
+        },
+        {
+          "from": "peek",
+          "to": "walk_for_burst",
+          "order": 1
+        },
+        {
+          "from": "walk_for_burst",
+          "to": "aim_burst",
+          "order": 2
+        },
+        {
+          "from": "aim_burst",
+          "to": "burst",
+          "order": 3
+        },
+        {
+          "from": "burst",
+          "to": "stop_burst",
+          "order": 4
+        },
+        {
+          "from": "stop_burst",
+          "to": "wait_reassess",
+          "order": 5
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "find_firing",
+          "branch": "candidate: safer angle"
+        },
+        {
+          "from": "find_firing",
+          "to": "jog_to_firing",
+          "order": 1
+        },
+        {
+          "from": "jog_to_firing",
+          "to": "move_firing",
+          "order": 2
+        },
+        {
+          "from": "move_firing",
+          "to": "subplan_shoot_move",
+          "order": 3
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "combat_ammo",
+          "branch": "candidate: ammo recovery"
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "stalk_ambush",
+          "branch": "candidate: unseen approach"
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "fallback_survive",
+          "branch": "candidate: survival fallback"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.StalkForAmbush": {
+      "title": "Stalk for ambush",
+      "description": "Контролируемый approach, когда agent/squad видит текущую threat, но оценивает, что threat не осведомлена или не смотрит в их сторону.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Stalk root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.SquadFactSync",
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 1
+          }
+        },
+        "prefer_approach": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Можно сблизиться скрытно?",
+          "description": "Разрешает сближение к covered attack position, если угроза не осведомлена и маршрут не раскрывает сквад.",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 1,
+            "lane": 1
+          },
+          "reads": [
+            "Combat.ThreatAwarenessOfAgent",
+            "Combat.ThreatFacingAgent",
+            "Combat.DistanceToThreat",
+            "Combat.ApproachRouteRisk",
+            "Combat.PreferredAttackPosition",
+            "Squad.ExposureRisk"
+          ],
+          "branch_contract": {
+            "top": "FindAmbushApproachPosition и MoveToAmbushApproachPosition требуют CanStalkCloser, ThreatUnawareOrNotFacing и ApproachRouteAcceptable.",
+            "bottom": "Hold current angle quietly, если подход невалиден."
+          },
+          "top_branch_rejected_when": [
+            "угроза знает об агенте",
+            "угроза смотрит в сектор на короткой дистанции",
+            "нет covered approach кандидат",
+            "ApproachRouteRisk слишком высокий"
+          ],
+          "replan_triggers": [
+            "угроза повернулась к скваду",
+            "awareness выросла",
+            "approach route risk изменился",
+            "дистанция пересекла порог"
+          ],
+          "implementation_notes": "Не открывать дальний огонь только из-за LOS, если угроза нас не знает."
+        },
+        "find_approach": {
+          "type": "task",
+          "task_ref": "task.FindAmbushApproachPosition",
+          "title": "Find covered attack position",
+          "decorators": [
+            "decorator.CanStalkCloser",
+            "decorator.ThreatUnawareOrNotFacing"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "move_approach": {
+          "type": "task",
+          "task_ref": "task.MoveToAmbushApproachPosition",
+          "title": "Move unseen to attack position",
+          "decorators": [
+            "decorator.ApproachRouteAcceptable",
+            "decorator.ThreatUnawareOrNotFacing"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "jog_approach": {
+          "type": "task",
+          "task_ref": "task.SetGaitJog",
+          "title": "Move for unseen approach",
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "walk_ambush_aim": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set aiming movement pace",
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "aim_ambush": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Aim from ambush angle",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        },
+        "hold_ambush": {
+          "type": "task",
+          "task_ref": "task.HoldAmbushAngle",
+          "title": "Hold covered ambush angle",
+          "decorators": [
+            "decorator.ThreatUnawareOrNotFacing"
+          ],
+          "layout": {
+            "col": 7,
+            "lane": 0
+          }
+        },
+        "hold_without_approach": {
+          "type": "task",
+          "task_ref": "task.HoldAngleAndScan",
+          "title": "Hold current angle quietly",
+          "decorators": [
+            "decorator.ThreatUnawareOrNotFacing"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 2
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_approach"
+        },
+        {
+          "from": "prefer_approach",
+          "to": "find_approach",
+          "branch": "top: safe unseen approach"
+        },
+        {
+          "from": "find_approach",
+          "to": "jog_approach",
+          "order": 1
+        },
+        {
+          "from": "jog_approach",
+          "to": "move_approach",
+          "order": 2
+        },
+        {
+          "from": "move_approach",
+          "to": "walk_ambush_aim",
+          "order": 3
+        },
+        {
+          "from": "walk_ambush_aim",
+          "to": "aim_ambush",
+          "order": 4
+        },
+        {
+          "from": "aim_ambush",
+          "to": "hold_ambush",
+          "order": 5
+        },
+        {
+          "from": "prefer_approach",
+          "to": "hold_without_approach",
+          "branch": "bottom: keep quiet angle"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.LostContact": {
+      "title": "Handle lost contact or suspicious stimulus",
+      "description": "Search/investigation plans, которые различают shot origin, bullet impact, near miss и ally-hit reaction, а не считают любой звук точным знанием target.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Lost contact root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.UpdateStimulusFacts",
+            "service.SquadFactSync"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 3
+          }
+        },
+        "prefer_stimulus": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Есть источник выстрела?",
+          "layout": {
+            "col": 1,
+            "lane": 3
+          },
+          "description": "Сначала использует звук выстрела как лучший search anchor.",
+          "reads": [
+            "Combat.WeaponReportLocation",
+            "Combat.WeaponReportAgeSec",
+            "Combat.SearchAnchor"
+          ],
+          "branch_contract": {
+            "top": "Пишет SearchAnchor из weapon report.",
+            "bottom": "Если weapon report нет, проверяет impact/near miss."
+          },
+          "top_branch_rejected_when": [
+            "WeaponReportLocation не задан",
+            "WeaponReportAgeSec > max_weapon_report_age"
+          ],
+          "replan_triggers": [
+            "новый weapon report",
+            "weapon report устарел"
+          ],
+          "implementation_notes": "WeaponReportLocation - примерный origin выстрела, не точная позиция угрозы."
+        },
+        "weapon_report_memory": {
+          "type": "task",
+          "task_ref": "task.UpdateThreatMemoryFromWeaponReport",
+          "title": "Use weapon report origin",
+          "decorators": [
+            "decorator.HasRecentWeaponReport"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "prefer_impact": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Был impact или near miss?",
+          "layout": {
+            "col": 2,
+            "lane": 3
+          },
+          "description": "Использует попадание рядом или near miss как направление опасности.",
+          "reads": [
+            "Combat.BulletImpactLocation",
+            "Combat.NearMissDirection",
+            "Combat.NearMissAgeSec",
+            "Combat.SearchAnchor"
+          ],
+          "branch_contract": {
+            "top": "Пишет SearchAnchor из impact/near miss.",
+            "bottom": "Если cue нет, проверяет реакцию союзника."
+          },
+          "top_branch_rejected_when": [
+            "нет recent bullet impact",
+            "нет recent near miss",
+            "cue устарел"
+          ],
+          "replan_triggers": [
+            "новый bullet impact",
+            "новый near miss",
+            "cue устарел"
+          ],
+          "implementation_notes": "Impact/NearMiss создают сектор поиска, а не точную ThreatLocation."
+        },
+        "impact_memory": {
+          "type": "task",
+          "task_ref": "task.UpdateThreatMemoryFromImpactOrNearMiss",
+          "title": "Use impact / near miss",
+          "decorators": [
+            "decorator.HasRecentImpactOrNearMiss"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 1
+          }
+        },
+        "prefer_ally_hit": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Союзник под огнем?",
+          "layout": {
+            "col": 3,
+            "lane": 4
+          },
+          "description": "Использует попадание или near miss союзника как боевой сигнал без прямого восприятия стрелка.",
+          "reads": [
+            "Squad.AllyUnderFire",
+            "Combat.AllyHitReactionLocation",
+            "Combat.AllyHitReactionAgeSec",
+            "Combat.SearchAnchor"
+          ],
+          "branch_contract": {
+            "top": "Пишет SearchAnchor из ally-hit reaction.",
+            "bottom": "Если cue нет, проверяет generic stimulus."
+          },
+          "top_branch_rejected_when": [
+            "Squad.AllyUnderFire false",
+            "AllyHitReactionAgeSec > 5 или нет casualty location"
+          ],
+          "replan_triggers": [
+            "новый squad casualty/hit/near-miss",
+            "ally cue устарел"
+          ],
+          "implementation_notes": "Cue работает, если агент видел/слышал реакцию союзника рядом."
+        },
+        "ally_hit_memory": {
+          "type": "task",
+          "task_ref": "task.UpdateThreatMemoryFromAllyHitReaction",
+          "title": "React to ally being hit",
+          "decorators": [
+            "decorator.HasRecentAllyHitReaction"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 2
+          }
+        },
+        "prefer_generic_stimulus": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Есть другой свежий стимул?",
+          "layout": {
+            "col": 4,
+            "lane": 5
+          },
+          "description": "Использует общий подозрительный стимул только когда более точного сигнала нет.",
+          "reads": [
+            "Combat.StimulusLocation",
+            "Combat.StimulusAgeSec",
+            "Combat.StimulusConfidence",
+            "Combat.SearchAnchor"
+          ],
+          "branch_contract": {
+            "top": "Создает generic SearchAnchor.",
+            "bottom": "Если свежего stimulus нет, переходит к cautious pursuit / return задача."
+          },
+          "top_branch_rejected_when": [
+            "StimulusLocation не задан",
+            "StimulusConfidence ниже порога",
+            "StimulusAgeSec > max_generic_stimulus_age"
+          ],
+          "replan_triggers": [
+            "новый generic stimulus",
+            "stimulus устарел"
+          ],
+          "implementation_notes": "Generic stimulus дает меньшую уверенность и большую uncertainty cost."
+        },
+        "generic_stimulus_memory": {
+          "type": "task",
+          "task_ref": "task.UpdateThreatMemoryFromStimulus",
+          "title": "Use other suspicious stimulus",
+          "decorators": [
+            "decorator.HasRecentStimulus"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 4
+          }
+        },
+        "hold_angle": {
+          "type": "task",
+          "task_ref": "task.HoldAngleAndScan",
+          "title": "Hold angle and scan",
+          "decorators": [
+            "decorator.HasActionableStimulusOrLKP"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 2
+          }
+        },
+        "prefer_pursue": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Продолжать поиск?",
+          "layout": {
+            "col": 6,
+            "lane": 4
+          },
+          "description": "Разрешает осторожный поиск, пока информация свежая и следующий шаг безопасен.",
+          "reads": [
+            "Combat.ThreatConfidence",
+            "Combat.SearchAnchor",
+            "Combat.LKPAgeSec",
+            "Combat.CoverRouteRisk",
+            "Combat.NextSearchStep"
+          ],
+          "branch_contract": {
+            "top": "Выполняет CautiousSearchStep при HasActionableStimulusOrLKP и CoverRouteAcceptable.",
+            "bottom": "ReturnToObjectiveAlerted, если информация слабая, старая или путь небезопасен."
+          },
+          "top_branch_rejected_when": [
+            "ThreatConfidence < 0.42 и нет свежего stimulus",
+            "LKPAgeSec > max_search_lkp_age",
+            "CoverRouteRisk слишком высокий",
+            "нет валидного cover-to-cover search step"
+          ],
+          "replan_triggers": [
+            "direct contact стал confirmed",
+            "search anchor устарел",
+            "route risk изменился"
+          ],
+          "implementation_notes": "Search не должен превращаться в rush к угрозе."
+        },
+        "jog_search_step": {
+          "type": "task",
+          "task_ref": "task.SetGaitJog",
+          "title": "Set cautious search pace",
+          "layout": {
+            "col": 7,
+            "lane": 3
+          }
+        },
+        "search_step": {
+          "type": "task",
+          "task_ref": "task.CautiousSearchStep",
+          "title": "Cautious cover-to-cover search step",
+          "decorators": [
+            "decorator.HasActionableStimulusOrLKP",
+            "decorator.CoverRouteAcceptable"
+          ],
+          "layout": {
+            "col": 8,
+            "lane": 3
+          }
+        },
+        "return_objective": {
+          "type": "task",
+          "task_ref": "task.ReturnToObjectiveAlerted",
+          "title": "Return to objective alerted",
+          "description": "Не преследует слабую или устаревшую информацию.",
+          "layout": {
+            "col": 8,
+            "lane": 5
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_stimulus"
+        },
+        {
+          "from": "prefer_stimulus",
+          "to": "weapon_report_memory",
+          "branch": "top: weapon report origin"
+        },
+        {
+          "from": "weapon_report_memory",
+          "to": "hold_angle",
+          "order": 1
+        },
+        {
+          "from": "prefer_stimulus",
+          "to": "prefer_impact",
+          "branch": "bottom: no weapon report"
+        },
+        {
+          "from": "prefer_impact",
+          "to": "impact_memory",
+          "branch": "top: impact or near miss"
+        },
+        {
+          "from": "impact_memory",
+          "to": "hold_angle",
+          "order": 1
+        },
+        {
+          "from": "prefer_impact",
+          "to": "prefer_ally_hit",
+          "branch": "bottom: no impact cue"
+        },
+        {
+          "from": "prefer_ally_hit",
+          "to": "ally_hit_memory",
+          "branch": "top: ally hit reaction"
+        },
+        {
+          "from": "ally_hit_memory",
+          "to": "hold_angle",
+          "order": 1
+        },
+        {
+          "from": "prefer_ally_hit",
+          "to": "prefer_generic_stimulus",
+          "branch": "bottom: no ally cue"
+        },
+        {
+          "from": "prefer_generic_stimulus",
+          "to": "generic_stimulus_memory",
+          "branch": "top: other stimulus fresh"
+        },
+        {
+          "from": "generic_stimulus_memory",
+          "to": "hold_angle",
+          "order": 1
+        },
+        {
+          "from": "prefer_generic_stimulus",
+          "to": "prefer_pursue",
+          "branch": "bottom: no fresh stimulus"
+        },
+        {
+          "from": "hold_angle",
+          "to": "prefer_pursue",
+          "branch": "after scan: search if still useful"
+        },
+        {
+          "from": "prefer_pursue",
+          "to": "jog_search_step",
+          "branch": "top: actionable stimulus or LKP"
+        },
+        {
+          "from": "jog_search_step",
+          "to": "search_step",
+          "order": 1
+        },
+        {
+          "from": "prefer_pursue",
+          "to": "return_objective",
+          "branch": "bottom: stale or unsafe"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.ManageAmmo": {
+      "title": "Manage ammo",
+      "description": "Управление боезапасом: перезарядка, смена оружия и подготовка укрытия. Пустой магазин требует быстрой реакции, но перезарядка на открытом месте под подтвержденной угрозой невалидна.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Ammo root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.UpdateAmmoPressure"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 2
+          }
+        },
+        "prefer_switch": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Достать вторичное оружие?",
+          "layout": {
+            "col": 1,
+            "lane": 2
+          },
+          "description": "Переключается на вторичное оружие, если основное оружие пустое, а перезарядка сейчас опасна.",
+          "reads": [
+            "Weapon.AmmoInMag",
+            "Weapon.HasSidearmReady",
+            "Weapon.SafeReloadWindow",
+            "Combat.IncomingFire"
+          ],
+          "branch_contract": {
+            "top": "SwitchToSidearm при PrimaryEmptyReloadUnsafe.",
+            "bottom": "Иначе проверяет укрытие перед перезарядкой и варианты перезарядки."
+          },
+          "top_branch_rejected_when": [
+            "основное оружие не пустое",
+            "HasSidearm false",
+            "вторичное оружие без патронов",
+            "SafeReloadWindow уже true"
+          ],
+          "replan_triggers": [
+            "AmmoInMag упал до 0",
+            "SafeReloadWindow изменился",
+            "доступность вторичного оружия изменилась"
+          ],
+          "implementation_notes": "Вторичное оружие - быстрый emergency recovery, не замена ранней перезарядке."
+        },
+        "switch_sidearm": {
+          "type": "task",
+          "task_ref": "task.SwitchToSidearm",
+          "title": "Switch to sidearm",
+          "decorators": [
+            "decorator.PrimaryEmptyReloadUnsafe"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "prefer_reload_cover": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Нужно укрытие перед перезарядкой?",
+          "description": "Заранее уводит агента к укрытию для перезарядки, если ammo pressure скоро сделает перезарядку необходимой.",
+          "plan_adjustment": "Try Switch To Higher Priority Branch",
+          "layout": {
+            "col": 2,
+            "lane": 2
+          },
+          "reads": [
+            "Weapon.AmmoPressure",
+            "Weapon.EstimatedSecondsToEmpty",
+            "Weapon.ReloadDurationSec",
+            "Weapon.SafeReloadWindow",
+            "Weapon.ReloadCoverCandidate",
+            "Combat.CoverRouteRisk"
+          ],
+          "branch_contract": {
+            "top": "Найти укрытие для перезарядки, зарезервировать его, прекратить огонь, уйти к укрытию и перезарядиться.",
+            "bottom": "Если подготовка укрытия не нужна или невозможна, перейти к перезарядке на месте или ранней перезарядке."
+          },
+          "top_branch_rejected_when": [
+            "AmmoPressure ниже порога",
+            "нет безопасного cover candidate",
+            "CoverRouteRisk слишком высокий",
+            "нет spare magazine",
+            "SafeReloadWindow уже true на текущей позиции"
+          ],
+          "replan_triggers": [
+            "AmmoPressure пересек порог",
+            "PredictedTimeToEmpty изменился",
+            "SafeReloadWindow изменился",
+            "укрытие для перезарядки стало невалидным или занятым"
+          ],
+          "implementation_notes": "AmmoPressure считается по профилю оружия: доля магазина, fire rate, burst cadence, длительность перезарядки и дистанция боя."
+        },
+        "find_reload_cover": {
+          "type": "task",
+          "task_ref": "task.FindSafeCover",
+          "title": "Find reload cover",
+          "decorators": [
+            "decorator.LowAmmoRepositionSoon"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "reserve_reload_cover": {
+          "type": "task",
+          "task_ref": "task.ReserveCover",
+          "title": "Reserve reload cover",
+          "decorators": [
+            "decorator.HasSafeCoverCandidate"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "move_reload_cover": {
+          "type": "task",
+          "task_ref": "task.MoveToSelectedCover",
+          "title": "Move to reload cover",
+          "decorators": [
+            "decorator.CoverRouteAcceptable"
+          ],
+          "services": [
+            "service.ValidateCoverRoute"
+          ],
+          "layout": {
+            "col": 7,
+            "lane": 0
+          }
+        },
+        "stop_fire_reload_sprint": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop fire before fast move",
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "sprint_reload_cover": {
+          "type": "task",
+          "task_ref": "task.SetGaitSprint",
+          "title": "Fast move to reload cover",
+          "decorators": [
+            "decorator.SprintAllowedNoImmediateFire"
+          ],
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        },
+        "enter_reload_cover": {
+          "type": "task",
+          "task_ref": "task.EnterCoverStance",
+          "title": "Enter reload cover stance",
+          "decorators": [
+            "decorator.NoGrenadeOrImmediateFlush"
+          ],
+          "layout": {
+            "col": 8,
+            "lane": 0
+          }
+        },
+        "reload_after_cover": {
+          "type": "task",
+          "task_ref": "task.ReloadWeapon",
+          "title": "Reload after reaching cover",
+          "decorators": [
+            "decorator.SafeReloadWindow"
+          ],
+          "layout": {
+            "col": 9,
+            "lane": 0
+          }
+        },
+        "prefer_reload": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Можно перезарядиться здесь?",
+          "layout": {
+            "col": 3,
+            "lane": 2
+          },
+          "description": "Разрешает перезарядку на месте только в безопасном окне.",
+          "reads": [
+            "Weapon.SafeReloadWindow",
+            "Weapon.ReloadDurationSec",
+            "Combat.IncomingFire",
+            "Combat.CurrentPositionSurvivability",
+            "Weapon.HasSpareMagazine"
+          ],
+          "branch_contract": {
+            "top": "ReloadWeapon при SafeReloadWindow.",
+            "bottom": "Если перезарядка небезопасна, проверяет раннюю перезарядку или снижает exposure."
+          },
+          "top_branch_rejected_when": [
+            "SafeReloadWindow false",
+            "нет spare magazine",
+            "IncomingFire слишком сильный",
+            "укрытие не выдерживает длительность перезарядки"
+          ],
+          "replan_triggers": [
+            "SafeReloadWindow изменился",
+            "IncomingFire усилился",
+            "стойка в укрытии повысила живучесть"
+          ],
+          "implementation_notes": "SafeReloadWindow учитывает длительность перезарядки, exposure, distance to threat и incoming fire."
+        },
+        "reload": {
+          "type": "task",
+          "task_ref": "task.ReloadWeapon",
+          "title": "Reload weapon",
+          "decorators": [
+            "decorator.SafeReloadWindow"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 2
+          }
+        },
+        "early_reload": {
+          "type": "task",
+          "task_ref": "task.ReloadWeapon",
+          "title": "Tactical reload early",
+          "decorators": [
+            "decorator.ShouldReloadEarly",
+            "decorator.SafeReloadWindow"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 3
+          }
+        },
+        "prefer_early_reload": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Перезарядиться заранее?",
+          "description": "Делает перезарядку до пустого магазина, если профиль оружия и безопасное окно делают это выгодным.",
+          "layout": {
+            "col": 4,
+            "lane": 3
+          },
+          "reads": [
+            "Weapon.ShouldReloadEarly",
+            "Weapon.AmmoPressure",
+            "Weapon.EstimatedSecondsToEmpty",
+            "Weapon.SafeReloadWindow",
+            "Weapon.ReloadDurationSec"
+          ],
+          "branch_contract": {
+            "top": "ReloadWeapon при ShouldReloadEarly и SafeReloadWindow.",
+            "bottom": "ReduceExposureInPlace, если ранняя перезарядка невалидна."
+          },
+          "top_branch_rejected_when": [
+            "ShouldReloadEarly false",
+            "SafeReloadWindow false",
+            "AmmoPressure низкий",
+            "нет spare magazine"
+          ],
+          "replan_triggers": [
+            "AmmoPressure изменился",
+            "SafeReloadWindow появился/пропал",
+            "weapon fire mode изменился"
+          ],
+          "implementation_notes": "ShouldReloadEarly зависит от размера магазина, расхода ammo, fire rate, длительности перезарядки и ожидаемой длительности боя."
+        },
+        "reduce_exposure_no_reload": {
+          "type": "task",
+          "task_ref": "task.ReduceExposureInPlace",
+          "title": "Reduce exposure without reload",
+          "description": "Если восстановление боеспособности оружия небезопасно, снижает риск текущей позиции вместо провала всего плана.",
+          "layout": {
+            "col": 5,
+            "lane": 5
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "prefer_switch"
+        },
+        {
+          "from": "prefer_switch",
+          "to": "switch_sidearm",
+          "branch": "top: primary empty and reload unsafe"
+        },
+        {
+          "from": "prefer_switch",
+          "to": "prefer_reload_cover",
+          "branch": "bottom"
+        },
+        {
+          "from": "prefer_reload_cover",
+          "to": "find_reload_cover",
+          "branch": "top: ammo low, get cover before reload"
+        },
+        {
+          "from": "find_reload_cover",
+          "to": "reserve_reload_cover",
+          "order": 1
+        },
+        {
+          "from": "reserve_reload_cover",
+          "to": "stop_fire_reload_sprint",
+          "order": 2
+        },
+        {
+          "from": "stop_fire_reload_sprint",
+          "to": "sprint_reload_cover",
+          "order": 3
+        },
+        {
+          "from": "sprint_reload_cover",
+          "to": "move_reload_cover",
+          "order": 4
+        },
+        {
+          "from": "move_reload_cover",
+          "to": "enter_reload_cover",
+          "order": 5
+        },
+        {
+          "from": "enter_reload_cover",
+          "to": "reload_after_cover",
+          "order": 6
+        },
+        {
+          "from": "prefer_reload_cover",
+          "to": "prefer_reload",
+          "branch": "bottom: already safe or no cover route"
+        },
+        {
+          "from": "prefer_reload",
+          "to": "reload",
+          "branch": "top: safe reload window"
+        },
+        {
+          "from": "prefer_reload",
+          "to": "prefer_early_reload",
+          "branch": "bottom: no safe reload window"
+        },
+        {
+          "from": "prefer_early_reload",
+          "to": "early_reload",
+          "branch": "top: early reload policy passes"
+        },
+        {
+          "from": "prefer_early_reload",
+          "to": "reduce_exposure_no_reload",
+          "branch": "bottom: cannot recover weapon safely"
+        }
+      ]
+    },
+    "HTN.HumanoidCombat.FireOpportunity": {
+      "title": "Fire opportunity",
+      "description": "Небольшой optional subplan после repositioning или внутри optional fire contexts. Если валиден окно огня нет, успешно завершается без стрельбы вместо провала внешнего plan.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Fire opportunity root",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.UpdateAmmoPressure",
+            "service.ReplanIfThreatLocationChanges"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 1
+          }
+        },
+        "prefer_fire_window": {
+          "type": "structural",
+          "ue_class": "HTNNode_Prefer",
+          "title": "Есть окно для огня?",
+          "description": "Пробует короткое окно огня. Если стрелять нельзя, успешно завершается и не ломает внешний план.",
+          "layout": {
+            "col": 2,
+            "lane": 1
+          },
+          "reads": [
+            "Combat.ThreatConfirmed",
+            "Weapon.CanFire",
+            "Combat.CanExposeForShot",
+            "Agent.CanFireInCurrentGait",
+            "Weapon.AmmoInMag"
+          ],
+          "branch_contract": {
+            "top": "Peek, aim, fire и stop fire, пока ThreatConfirmed, WeaponCanFire, CanExposeForShot и NotSprintingForFire валидны.",
+            "bottom": "Success, если любое условие огня не проходит."
+          },
+          "top_branch_rejected_when": [
+            "ThreatConfirmed false",
+            "WeaponCanFire false",
+            "CanExposeForShot false",
+            "NotSprintingForFire false",
+            "ammo упал до 0"
+          ],
+          "replan_triggers": [
+            "LOS/exposure изменились",
+            "AmmoInMag стал 0 или оружие перезарядилось",
+            "gait переключился в быстрый режим"
+          ],
+          "implementation_notes": "Использовать Prefer + Success для опционального огня."
+        },
+        "peek": {
+          "type": "task",
+          "task_ref": "task.PeekAndSampleLOS",
+          "title": "Peek and sample LOS",
+          "layout": {
+            "col": 1,
+            "lane": 1
+          }
+        },
+        "walk_for_fire": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Set fire movement pace",
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "aim": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Aim weapon at threat",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "fire": {
+          "type": "task",
+          "task_ref": "task.StartControlledFire",
+          "title": "Start controlled fire",
+          "decorators": [
+            "decorator.ThreatConfirmed",
+            "decorator.WeaponCanFire",
+            "decorator.CanExposeForShot",
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "stop_fire": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Stop controlled fire",
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        },
+        "no_fire": {
+          "type": "task",
+          "task_ref": "task.Success",
+          "title": "No fire window",
+          "description": "Сейчас нет безопасного окна для выстрела; внешний план должен продолжиться.",
+          "layout": {
+            "col": 3,
+            "lane": 2
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "peek"
+        },
+        {
+          "from": "peek",
+          "to": "prefer_fire_window",
+          "order": 1
+        },
+        {
+          "from": "prefer_fire_window",
+          "to": "walk_for_fire",
+          "branch": "top: fire opportunity"
+        },
+        {
+          "from": "walk_for_fire",
+          "to": "aim",
+          "order": 2
+        },
+        {
+          "from": "aim",
+          "to": "fire",
+          "order": 3
+        },
+        {
+          "from": "fire",
+          "to": "stop_fire",
+          "order": 4
+        },
+        {
+          "from": "prefer_fire_window",
+          "to": "no_fire",
+          "branch": "bottom: no fire opportunity"
+        }
+      ]
+    }
+  },
+  "use_cases": {
+    "case.OpenAreaIncomingFireNoSafeCover": {
+      "title": "Входящий огонь на открытом месте, безопасного пути к укрытию нет",
+      "initial_worldstate": {
+        "Combat.ExpectedDeathRisk": 0.72,
+        "Combat.CurrentPositionSurvivability": 0.2,
+        "Combat.CoverRouteRisk": 0.86,
+        "Combat.IncomingFire": 0.8,
+        "Weapon.AmmoInMag": 9
+      },
+      "expected_plan_shape": [
+        "HTN.HumanoidCombat.Root",
+        "Prefer immediate survival",
+        "Survive immediate threat",
+        "Fallback: break LOS locally",
+        "Short LOS-break move",
+        "Break LOS lateral",
+        "Reduce exposure in place"
+      ],
+      "should_not_plan": [
+        "Длинный MoveToSelectedCover через открытое место: CoverRouteAcceptable должен провалиться."
+      ]
+    },
+    "case.ConfirmedEnemyCoveredShot": {
+      "title": "Угроза видима, у агента есть укрытие и короткое безопасное окно огня",
+      "initial_worldstate": {
+        "Combat.ThreatConfidence": 0.9,
+        "Combat.LOSQuality": 0.7,
+        "Combat.DistanceToThreat": 22,
+        "Combat.ThreatAwarenessOfAgent": 0.75,
+        "Combat.ThreatFacingAgent": 0.55,
+        "Combat.ExpectedDeathRisk": 0.32,
+        "Combat.CurrentPositionSurvivability": 0.72,
+        "Weapon.AmmoInMag": 14,
+        "Weapon.EstimatedSecondsToEmpty": 7,
+        "Weapon.ReloadLeadTimeSec": 3,
+        "Weapon.AmmoPressure": 0.25,
+        "Combat.LKPAgeSec": 0
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Choose lowest-risk confirmed-contact plan",
+        "candidate: covered fire",
+        "Peek and sample LOS",
+        "Set fire movement pace",
+        "Aim weapon at threat",
+        "Start controlled fire",
+        "Stop controlled fire",
+        "Recover and reassess"
+      ],
+      "cost_notes": "План огня из укрытия выигрывает только если его суммарный exposure/ammo/time cost ниже, чем у смены угла, ammo recovery, close запасной вариант и unseen approach."
+    },
+    "case.CloseThreatImmediateFightMoveCover": {
+      "title": "Угроза близко и может быстро убить агента",
+      "initial_worldstate": {
+        "Combat.ThreatConfidence": 0.92,
+        "Combat.LOSQuality": 0.72,
+        "Combat.DistanceToThreat": 7,
+        "Combat.ThreatAwarenessOfAgent": 0.82,
+        "Combat.ThreatFacingAgent": 0.78,
+        "Combat.CoverRouteRisk": 0.36,
+        "Combat.ExpectedDeathRisk": 0.48,
+        "Weapon.AmmoInMag": 10,
+        "Combat.LKPAgeSec": 0
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Choose lowest-risk confirmed-contact plan",
+        "candidate: close fallback",
+        "Find nearest fighting cover",
+        "Set close-fight pace",
+        "Parallel: fight while falling back",
+        "Move to nearest cover",
+        "Prefer optional fire while falling back",
+        "Aim while falling back",
+        "Start fire while falling back",
+        "Stop fire after fallback"
+      ],
+      "should_not_plan": [
+        "Долгая безопасная перезарядка под давлением ближней угрозы.",
+        "План только спрятаться без ответного огня на близкой дистанции."
+      ],
+      "cost_notes": "Ближний запасной вариант должен выигрывать, когда дистанция, осведомленность угрозы и направление взгляда делают чистое укрытие или прямой огонь дороже, чем отход к укрытию с опциональным огнем."
+    },
+    "case.LowAmmoPrepareCoverBeforeReload": {
+      "title": "Магазин еще не пустой, но скоро понадобится перезарядка",
+      "initial_worldstate": {
+        "Combat.ThreatConfidence": 0.78,
+        "Combat.DistanceToThreat": 24,
+        "Combat.CurrentPositionSurvivability": 0.42,
+        "Combat.CoverRouteRisk": 0.38,
+        "Weapon.AmmoInMag": 5,
+        "Weapon.MagCapacity": 30,
+        "Weapon.HasSpareMagazine": true,
+        "Weapon.SafeReloadWindow": false,
+        "Weapon.ExpectedRoundsPerSecond": 3.2,
+        "Weapon.EstimatedSecondsToEmpty": 1.6,
+        "Weapon.ReloadLeadTimeSec": 3,
+        "Weapon.AmmoPressure": 0.82,
+        "Combat.LKPAgeSec": 0
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Recover weapon while contact remains confirmed",
+        "Manage ammo",
+        "Prefer cover before reload",
+        "Find reload cover",
+        "Stop fire before fast move",
+        "Fast move to reload cover",
+        "Move to reload cover",
+        "Reload after reaching cover"
+      ],
+      "should_not_plan": [
+        "SwitchToSidearm не нужен: основное оружие еще не пустое.",
+        "ReloadWeapon на открытом месте не должен строиться, пока SafeReloadWindow false."
+      ]
+    },
+    "case.HeardNoiseNoVisual": {
+      "title": "Слышен звук, визуального подтверждения нет",
+      "initial_worldstate": {
+        "Combat.StimulusLocation": "set",
+        "Combat.StimulusAgeSec": 1.4,
+        "Combat.ThreatConfidence": 0.28,
+        "Combat.LKPAgeSec": 0
+      },
+      "expected_plan_shape": [
+        "Handle lost contact or sound",
+        "Convert stimulus to search anchor",
+        "Hold angle and scan"
+      ],
+      "should_not_plan": [
+        "StartControlledFire, потому что ThreatConfirmed должен провалиться.",
+        "Быстрое преследование без LKPFreshEnoughForPursuit и CoverRouteAcceptable."
+      ]
+    },
+    "case.LostContactStaleLKP": {
+      "title": "Контакт потерян, LKP устарела",
+      "initial_worldstate": {
+        "Combat.ThreatConfidence": 0.22,
+        "Combat.LKPAgeSec": 18
+      },
+      "expected_plan_shape": [
+        "Return to objective alerted"
+      ],
+      "should_not_plan": [
+        "CautiousSearchStep по слабой устаревшей информации."
+      ]
+    },
+    "case.EmptyMagConfirmedThreatOpen": {
+      "title": "Пустой магазин при подтвержденной угрозе, перезарядка небезопасна, но survival еще не нужен",
+      "initial_worldstate": {
+        "Weapon.AmmoInMag": 0,
+        "Weapon.HasSidearmReady": true,
+        "Weapon.HasSpareMagazine": true,
+        "Weapon.SafeReloadWindow": false,
+        "Combat.ThreatConfidence": 0.82,
+        "Combat.DistanceToThreat": 18,
+        "Combat.CurrentPositionSurvivability": 0.46,
+        "Combat.LKPAgeSec": 0,
+        "Combat.ExpectedDeathRisk": 0.42,
+        "Combat.IncomingFire": 0.32
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Recover weapon while contact remains confirmed",
+        "Manage ammo",
+        "Switch to sidearm"
+      ],
+      "should_not_plan": [
+        "Handle lost contact or sound, потому что цель все еще подтверждена."
+      ],
+      "cost_notes": "Если живучесть позиции выше порога survival, fire candidates инвалидируются через WeaponCanFire, а ammo recovery выбирает вторичное оружие вместо небезопасной перезарядки. Если риск падает ниже порога survival, survival должен перебить этот case."
+    },
+    "case.WoundedAgentUnderPressure": {
+      "title": "Тяжело раненый агент под давлением огня",
+      "initial_worldstate": {
+        "Agent.HealthState": "HeavyWounded",
+        "Agent.Mobility": 0.42,
+        "Combat.IncomingFire": 0.55,
+        "Combat.ExpectedDeathRisk": 0.61,
+        "Combat.CoverRouteRisk": 0.5
+      },
+      "expected_plan_shape": [
+        "Survive immediate threat",
+        "Find safe cover candidates",
+        "Move to selected cover"
+      ],
+      "cost_notes": "HeavyWounded влияет на survival только при высоком давлении и риске. После укрытия или лечения риск падает ниже порогов, survival decorators перестают проходить, и планирование возвращается к бою или назначенной задаче."
+    },
+    "case.EnemyUnawareFarContact": {
+      "title": "Угроза далеко и, вероятно, не знает об агенте",
+      "initial_worldstate": {
+        "Combat.ThreatConfidence": 0.88,
+        "Combat.LOSQuality": 0.65,
+        "Combat.DistanceToThreat": 52,
+        "Combat.ThreatAwarenessOfAgent": 0.12,
+        "Combat.ThreatFacingAgent": 0.1,
+        "Combat.ApproachRouteRisk": 0.32,
+        "Weapon.AmmoInMag": 18,
+        "Weapon.AmmoPressure": 0.2,
+        "Combat.LKPAgeSec": 0
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Choose lowest-risk confirmed-contact plan",
+        "candidate: unseen approach",
+        "Stalk to covered attack position",
+        "Find covered attack position",
+        "Move for unseen approach",
+        "Move unseen to attack position",
+        "Set aiming movement pace",
+        "Aim from ambush angle",
+        "Hold covered ambush angle"
+      ],
+      "should_not_plan": [
+        "Дальний StartControlledFire, который слишком рано раскрывает сквад.",
+        "Lost-contact search, потому что цель видима/подтверждена."
+      ],
+      "cost_notes": "Скрытое сближение выигрывает, когда риск раскрытия низкий, а дальний прямой огонь слишком рано раскрывает сквад и имеет высокий cost из-за дистанции."
+    }
+  },
+  "blackboard_audit": {
+    "summary": "Короткие alias-имена в reads/writes заменены каноническими Blackboard keys с namespace-префиксами. Combat.* и Squad.Shared* оставлены отдельно: это локальная память агента и общие факты сквада.",
+    "canonical_rule": "В reads/writes использовать Combat.*, Weapon.*, Agent.*, Squad.*, Objective.* или Planner.*. Короткие aliases сохраняются только для поиска и клика по старым текстам.",
+    "kept_separate": [
+      "Combat.ThreatLocation vs Squad.SharedThreatLocation",
+      "Combat.ThreatConfidence vs Squad.SharedThreatConfidence"
+    ],
+    "aliases_normalized": [
+      "CoverRouteRisk -> Combat.CoverRouteRisk",
+      "ExposureAtPost -> Objective.GuardPostExposure",
+      "SectorCoverageScore -> Objective.GuardSectorCoverageScore",
+      "TacticalInterruptionNeeded -> Planner.TacticalInterruptionNeeded",
+      "CriticalSurvivalNeeded -> Combat.CriticalSurvivalNeeded",
+      "ExpectedDeathRisk -> Combat.ExpectedDeathRisk",
+      "IncomingFire -> Combat.IncomingFire",
+      "HealthState -> Agent.HealthState",
+      "ExplosiveRisk -> Combat.ExplosiveRisk",
+      "ThreatConfirmed -> Combat.ThreatConfirmed",
+      "ThreatConfidence -> Combat.ThreatConfidence",
+      "LOSQuality -> Combat.LOSQuality",
+      "LKPAgeSec -> Combat.LKPAgeSec",
+      "ThreatLocation -> Combat.ThreatLocation",
+      "AmmoPressure -> Weapon.AmmoPressure",
+      "SafeCoverCandidate -> Combat.SelectedCover",
+      "StimulusLocation -> Combat.StimulusLocation",
+      "StimulusAgeSec -> Combat.StimulusAgeSec",
+      "SearchAnchor -> Combat.SearchAnchor",
+      "AllyHitReactionAgeSec -> Combat.AllyHitReactionAgeSec",
+      "MobilityState -> Agent.Mobility",
+      "LocalLOSBREAKOffset -> Combat.LocalLOSBreakOffset",
+      "WeaponCanFire -> Weapon.CanFire",
+      "AmmoInMag -> Weapon.AmmoInMag",
+      "SuppressibleCoverRoute -> Combat.SuppressibleCoverRoute",
+      "ExpectedSuppressionRouteRisk -> Combat.ExpectedSuppressionRouteRisk",
+      "CanExposeForShot -> Combat.CanExposeForShot",
+      "NotSprintingForFire -> Agent.CanFireInCurrentGait",
+      "ThreatAwareOfAgent -> Combat.ThreatAwarenessOfAgent",
+      "ThreatFacingAgent -> Combat.ThreatFacingAgent",
+      "DistanceToThreat -> Combat.DistanceToThreat",
+      "ApproachRouteRisk -> Combat.ApproachRouteRisk",
+      "CoveredAttackPosition -> Combat.PreferredAttackPosition",
+      "SquadExposureRisk -> Squad.ExposureRisk",
+      "WeaponReportLocation -> Combat.WeaponReportLocation",
+      "WeaponReportAgeSec -> Combat.WeaponReportAgeSec",
+      "ImpactLocation -> Combat.BulletImpactLocation",
+      "NearMissDirection -> Combat.NearMissDirection",
+      "NearMissAgeSec -> Combat.NearMissAgeSec",
+      "AllyHitReactionLocation -> Combat.AllyHitReactionLocation",
+      "StimulusConfidence -> Combat.StimulusConfidence",
+      "NextSearchStep -> Combat.NextSearchStep",
+      "PrimaryAmmoInMag -> Weapon.AmmoInMag",
+      "HasSidearm -> Weapon.HasSidearmReady",
+      "SidearmReady -> Weapon.HasSidearmReady",
+      "PredictedTimeToEmpty -> Weapon.EstimatedSecondsToEmpty",
+      "ReloadDuration -> Weapon.ReloadDurationSec",
+      "ReloadCoverCandidate -> Weapon.ReloadCoverCandidate",
+      "CoverQuality -> Combat.CurrentPositionSurvivability",
+      "SpareMagazines -> Weapon.HasSpareMagazine",
+      "ShouldReloadEarly -> Weapon.ShouldReloadEarly"
+    ]
+  }
+}
