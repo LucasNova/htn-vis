@@ -4,6 +4,7 @@ import {
   FileJson,
   Layers3,
   ListFilter,
+  ListChecks,
   Maximize2,
   Settings,
   ZoomIn,
@@ -43,7 +44,7 @@ import {
 const DEFAULT_MODEL_URL = `${import.meta.env.BASE_URL}data/humanoid_ue_htn_model_v1.json`;
 const GRID = 24;
 
-type InspectorTab = "details" | "world";
+type InspectorTab = "details" | "world" | "cases";
 type DetailRefTarget =
   | { type: "asset"; ref: string }
   | { type: "selection"; selection: NativeSelection };
@@ -105,6 +106,7 @@ const App: Component = () => {
   });
 
   const filteredWorld = createMemo(() => objectEntries(model()?.worldstate_keys ?? {}));
+  const filteredCases = createMemo(() => objectEntries(model()?.use_cases ?? {}));
   const assetCrumbs = createMemo(() => {
     const currentModel = model();
     if (!currentModel) return [];
@@ -391,6 +393,9 @@ const App: Component = () => {
             <button class={tab() === "world" ? "tab tab-active" : "tab"} type="button" onClick={() => setTab("world")}>
               Blackboard keys
             </button>
+            <button class={tab() === "cases" ? "tab tab-active" : "tab"} type="button" onClick={() => setTab("cases")}>
+              Use cases
+            </button>
           </div>
 
           <Show when={tab() === "details"}>
@@ -413,6 +418,17 @@ const App: Component = () => {
               kind="world"
               onSelect={(ref) => {
                 replaceDetails({ kind: "world", ref });
+              }}
+            />
+          </Show>
+          <Show when={tab() === "cases"}>
+            <RegistryPanel
+              icon={<ListChecks size={16} />}
+              title="Use cases"
+              entries={filteredCases()}
+              kind="use_case"
+              onSelect={(ref) => {
+                replaceDetails({ kind: "use_case", ref });
               }}
             />
           </Show>
@@ -1031,18 +1047,40 @@ const UseCaseDetails: Component<{ useCase: UeUseCase | undefined }> = (props) =>
     <Show when={props.useCase?.title}>
       <p class="detail-copy">{props.useCase?.title}</p>
     </Show>
-    <DetailSection title="Начальный Blackboard">
-      <ValueView value={props.useCase?.initial_worldstate} />
-    </DetailSection>
-    <DetailSection title="Ожидаемая форма плана">
-      <ValueView value={props.useCase?.expected_plan_shape} />
-    </DetailSection>
-    <DetailSection title="Не должен планировать">
-      <ValueView value={props.useCase?.should_not_plan} />
-    </DetailSection>
-    <DetailSection title="Заметки по стоимости">
-      <ValueView value={props.useCase?.cost_notes} />
-    </DetailSection>
+    <Show when={hasDetailValue(props.useCase?.initial_worldstate)}>
+      <DetailSection title="Начальный Blackboard">
+        <ValueView value={props.useCase?.initial_worldstate} />
+      </DetailSection>
+    </Show>
+    <Show when={hasDetailValue(props.useCase?.expected_plan_shape)}>
+      <DetailSection title="Ожидаемая форма плана">
+        <ValueView value={props.useCase?.expected_plan_shape} />
+      </DetailSection>
+    </Show>
+    <Show when={hasDetailValue(props.useCase?.should_not_plan)}>
+      <DetailSection title="Не должен планировать">
+        <ValueView value={props.useCase?.should_not_plan} />
+      </DetailSection>
+    </Show>
+    <Show when={hasDetailValue(props.useCase?.cost_notes)}>
+      <DetailSection title="Заметки по стоимости">
+        <ValueView value={props.useCase?.cost_notes} />
+      </DetailSection>
+    </Show>
+    <Show when={hasDetailValue(props.useCase?.readiness_expectations)}>
+      <DetailSection title="Ожидания по оружию">
+        <ValueView value={props.useCase?.readiness_expectations} />
+      </DetailSection>
+    </Show>
+    <Show when={hasDetailValue(props.useCase?.analysis_notes)}>
+      <DetailSection title="Аналитическая заметка">
+        <ValueView value={props.useCase?.analysis_notes} />
+      </DetailSection>
+    </Show>
+    <GenericDetails
+      entity={props.useCase}
+      skip={["title", "initial_worldstate", "expected_plan_shape", "should_not_plan", "cost_notes", "readiness_expectations", "analysis_notes"]}
+    />
   </>
 );
 

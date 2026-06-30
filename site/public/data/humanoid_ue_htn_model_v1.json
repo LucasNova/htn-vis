@@ -18,7 +18,9 @@
     "Огонь во вторичной ветке Parallel является опциональным, кроме специальных suppress-then-move веток.",
     "В бою с подтвержденной целью hard decorators отсекают невозможные варианты, а стоимость выбирает лучший допустимый план.",
     "Survival имеет жесткий приоритет только при высоком краткосрочном риске смерти. Ранения меняют пороги и стоимость, но не должны навсегда удерживать survival после стабилизации.",
-    "Пустой магазин должен уводить план в ammo recovery, укрытие или survival, а не в перемещение между огневыми углами без рабочего оружия."
+    "Пустой магазин должен уводить план в ammo recovery, укрытие или survival, а не в перемещение между огневыми углами без рабочего оружия.",
+    "Weapon.Readiness моделируется отдельно от gait и posture: Relaxed вне угрозы, Ready при настороженности/поиске/прикрытии, Aiming перед точным огнем.",
+    "Боевые задачи должны явно возвращать оружие из Aiming в Ready после окна огня, а спокойные objective-задачи должны опускать оружие обратно в Relaxed, чтобы агент не ходил постоянно с поднятой пушкой."
   ],
   "ue_htn_contract": {
     "planner_goal": "UE HTN строит допустимые планы и выбирает валидный план с минимальной суммарной положительной стоимостью.",
@@ -55,7 +57,7 @@
   },
   "cost_model": {
     "unit": "абстрактная положительная стоимость плана",
-    "formula_hint": "task_base + path_cost + exposure_penalty + death_risk_penalty + ammo_penalty + time_penalty + uncertainty_penalty + coordination_penalty + premature_reveal_penalty + distance_mismatch_penalty + wrong_gait_penalty",
+    "formula_hint": "task_base + path_cost + exposure_penalty + death_risk_penalty + ammo_penalty + time_penalty + uncertainty_penalty + coordination_penalty + premature_reveal_penalty + distance_mismatch_penalty + wrong_gait_penalty + wrong_weapon_readiness_penalty",
     "weights": {
       "path_cost_per_meter": 1,
       "time_cost_per_second": 4,
@@ -72,7 +74,9 @@
       "sprint_fire_blocker_penalty": 999,
       "threat_uncertainty_penalty": 35,
       "wounded_mobility_penalty": 45,
-      "squad_spacing_penalty": 15
+      "squad_spacing_penalty": 15,
+      "wrong_weapon_readiness_penalty": 55,
+      "weapon_readiness_transition_cost": 5
     },
     "hard_invalid_thresholds": {
       "max_expected_death_risk_for_open_move": 0.62,
@@ -95,7 +99,9 @@
       "premature_reveal_penalty",
       "distance_mismatch_penalty",
       "threat_uncertainty_penalty",
-      "squad_spacing_penalty"
+      "squad_spacing_penalty",
+      "wrong_weapon_readiness_penalty",
+      "weapon_readiness_transition_cost"
     ]
   },
   "worldstate_keys": {
@@ -802,6 +808,34 @@
       "aliases": [
         "TacticalInterruptionNeeded"
       ]
+    },
+    "Weapon.Readiness": {
+      "source": "Weapon/animation component / weapon readiness tasks",
+      "type": "Enum",
+      "values": [
+        "Relaxed",
+        "Ready",
+        "Aiming"
+      ],
+      "description": "Планируемое состояние оружия. Relaxed - оружие опущено и угрозы нет. Ready - оружие наготове, можно быстро стрелять менее точно. Aiming - агент целится в угрозу или threat point.",
+      "aliases": [
+        "WeaponReadiness"
+      ]
+    },
+    "Squad.CoveringFireRequest": {
+      "source": "service.SquadFactSync / squad tactical coordinator",
+      "type": "Bool",
+      "description": "Союзнику нужна короткая огневая поддержка для перебежки или смены укрытия. Не означает голосовую команду; это общий squad fact."
+    },
+    "Squad.TeammateRepositioning": {
+      "source": "service.SquadFactSync / squad tactical coordinator",
+      "type": "Bool",
+      "description": "Один из участников сквада сейчас выполняет опасное перемещение между укрытиями."
+    },
+    "Squad.CoveringFireLane": {
+      "source": "service.SquadFactSync / squad tactical coordinator",
+      "type": "Object",
+      "description": "Сектор или threat point, куда прикрывающий агент должен дать короткое подавление."
     }
   },
   "decorators": {
@@ -1343,6 +1377,28 @@
         "event_based": true
       },
       "default_alternative": "Нужна оценка риска маршрута после планируемого подавляющего огня."
+    },
+    "decorator.SquadCoveringFireRequested": {
+      "kind": "custom",
+      "ue_class": "UTAHTNDecorator_SquadCoveringFireRequested",
+      "description": "Проходит, когда союзник выполняет рискованную перебежку, а этот агент может ненадолго открыть огонь из приемлемой позиции.",
+      "reads": [
+        "Squad.CoveringFireRequest",
+        "Squad.TeammateRepositioning",
+        "Squad.CoveringFireLane",
+        "Combat.ThreatConfidence",
+        "Combat.CanExposeForShot",
+        "Weapon.CanFire",
+        "Agent.CanFireInCurrentGait"
+      ],
+      "condition": "Squad.CoveringFireRequest == true AND Squad.TeammateRepositioning == true AND Combat.ThreatConfidence >= 0.45 AND Combat.CanExposeForShot == true AND Weapon.CanFire == true AND Agent.CanFireInCurrentGait == true",
+      "check_time": {
+        "plan_enter": true,
+        "plan_recheck": true,
+        "tick": true,
+        "event_based": true
+      },
+      "default_alternative": "Если прикрытие невозможно, союзник должен выбирать более безопасный маршрут или ждать другое окно."
     }
   },
   "services": {
@@ -1456,7 +1512,7 @@
     "service.SquadFactSync": {
       "kind": "custom",
       "ue_class": "UTAHTNService_SquadFactSync",
-      "description": "Синхронизирует локальные факты угрозы с общими фактами сквада без отдельного voice/callout action.",
+      "description": "Синхронизирует локальные факты угрозы и простые coordination facts сквада без отдельного voice/callout action.",
       "reads": [
         "Combat.ThreatLocation",
         "Combat.ThreatConfidence",
@@ -1469,7 +1525,10 @@
         "Squad.SharedThreatConfidence",
         "Squad.SharedThreatAwareness",
         "Squad.AllyUnderFire",
-        "Squad.AllyCasualtyLocation"
+        "Squad.AllyCasualtyLocation",
+        "Squad.CoveringFireRequest",
+        "Squad.TeammateRepositioning",
+        "Squad.CoveringFireLane"
       ],
       "tick_interval_sec": [
         0.35,
@@ -1498,7 +1557,10 @@
         "Agent.HealthState",
         "Agent.Mobility",
         "Weapon.SafeReloadWindow",
-        "Weapon.EstimatedSecondsToEmpty"
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.Readiness",
+        "Squad.CoveringFireRequest",
+        "Squad.TeammateRepositioning"
       ],
       "tick_interval_sec": [
         0.15,
@@ -1618,13 +1680,15 @@
       "effects": [
         "Agent.MovementGait = Sprint",
         "Agent.CanFireInCurrentGait = false",
-        "Weapon.FireIntent = None"
+        "Weapon.FireIntent = None",
+        "Weapon.IsAimedAtThreat = false",
+        "Weapon.Readiness не должен оставаться Aiming во время Sprint"
       ]
     },
     "task.AimWeaponAtThreat": {
       "kind": "custom",
       "ue_class": "UTAHTNTask_AimWeaponAtThreat",
-      "description": "Наводит активное оружие на Combat.ThreatActor или Combat.ThreatLocation перед огнем.",
+      "description": "Переводит оружие из Ready в Aiming и наводит его на Combat.ThreatActor, Combat.ThreatLocation или Squad.CoveringFireLane.",
       "cost": {
         "base": 4,
         "formula": "aim_time * time_cost + exposure_penalty"
@@ -1633,11 +1697,13 @@
         "Combat.ThreatActor",
         "Combat.ThreatLocation",
         "Agent.MovementGait",
-        "Agent.CanFireInCurrentGait"
+        "Agent.CanFireInCurrentGait",
+        "Weapon.Readiness"
       ],
       "effects": [
         "Weapon.IsAimedAtThreat = true",
-        "Weapon.FireIntent = AimOnly"
+        "Weapon.FireIntent = AimOnly",
+        "Weapon.Readiness = Aiming"
       ]
     },
     "task.StartControlledFire": {
@@ -1654,14 +1720,16 @@
         "Agent.MovementGait",
         "Agent.CanFireInCurrentGait",
         "Combat.LOSQuality",
-        "Combat.ExpectedDeathRisk"
+        "Combat.ExpectedDeathRisk",
+        "Weapon.Readiness"
       ],
       "effects": [
         "Weapon.IsFiring = true",
         "Weapon.FireIntent = ControlledBurst",
         "Weapon.AmmoInMag уменьшается",
         "Combat.IncomingFire у угрозы может вырасти",
-        "Может вызвать Replan, когда оружие больше не может стрелять"
+        "Может вызвать Replan, когда оружие больше не может стрелять",
+        "Weapon.Readiness = Aiming"
       ],
       "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
     },
@@ -1678,14 +1746,18 @@
         "Weapon.IsAimedAtThreat",
         "Agent.MovementGait",
         "Agent.CanFireInCurrentGait",
-        "Combat.LOSQuality"
+        "Combat.LOSQuality",
+        "Weapon.Readiness",
+        "Squad.CoveringFireLane"
       ],
       "effects": [
         "Weapon.IsFiring = true",
         "Weapon.FireIntent = Suppress",
         "Weapon.AmmoInMag уменьшается",
         "Combat.CoverRouteRisk может снизиться",
-        "Может вызвать Replan, когда оружие больше не может стрелять"
+        "Может вызвать Replan, когда оружие больше не может стрелять",
+        "Weapon.Readiness = Aiming",
+        "Squad.TeammateRepositioning получает окно прикрытия, если это squad covering fire"
       ],
       "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
     },
@@ -1698,7 +1770,9 @@
       },
       "effects": [
         "Weapon.IsFiring = false",
-        "Weapon.FireIntent = None"
+        "Weapon.FireIntent = None",
+        "Weapon.Readiness = Ready",
+        "Weapon.IsAimedAtThreat = false"
       ]
     },
     "task.FindSafeCover": {
@@ -1987,7 +2061,11 @@
       },
       "effects": [
         "Combat.LOSQuality может увеличиться",
-        "Combat.ThreatConfidence может обновиться"
+        "Combat.ThreatConfidence может обновиться",
+        "Weapon.Readiness = Ready"
+      ],
+      "reads": [
+        "Weapon.Readiness"
       ]
     },
     "task.CautiousSearchStep": {
@@ -2001,12 +2079,14 @@
       "reads": [
         "Combat.SearchAnchor",
         "Combat.CoverRouteRisk",
-        "Agent.MovementGait"
+        "Agent.MovementGait",
+        "Weapon.Readiness"
       ],
       "effects": [
         "SelfLocation меняется",
         "Combat.LKPAgeSec увеличивается во время движения",
-        "Движение использует Agent.MovementGait"
+        "Движение использует Agent.MovementGait",
+        "Weapon.Readiness = Ready"
       ]
     },
     "task.ReloadWeapon": {
@@ -2027,7 +2107,9 @@
         "Weapon.FireIntent = None",
         "Weapon.AmmoInMag = Weapon.MagCapacity",
         "Weapon.HasSpareMagazine может уменьшиться",
-        "Weapon.AmmoPressure уменьшается, ammo-related decorators получают уведомление"
+        "Weapon.AmmoPressure уменьшается, ammo-related decorators получают уведомление",
+        "Weapon.Readiness = Ready",
+        "Weapon.IsAimedAtThreat = false"
       ],
       "execution": "После перезарядки уведомить ammo-pressure/event decorators или запросить plan adjustment."
     },
@@ -2045,7 +2127,9 @@
       "effects": [
         "Активное оружие меняется",
         "Weapon.AmmoInMag обновляется",
-        "Weapon.AmmoPressure пересчитывается для нового профиля оружия"
+        "Weapon.AmmoPressure пересчитывается для нового профиля оружия",
+        "Weapon.Readiness = Ready",
+        "Weapon.IsAimedAtThreat = false"
       ],
       "execution": "После switch weapon уведомить ammo-pressure/event decorators, чтобы planner мог вернуться к combat кандидат."
     },
@@ -2058,7 +2142,8 @@
         "formula": "path_cost + uncertainty_penalty"
       },
       "effects": [
-        "Planner.Focus = Objective"
+        "Planner.Focus = Objective",
+        "Weapon.Readiness = Ready"
       ]
     },
     "task.SelectNextPatrolPoint": {
@@ -2123,11 +2208,13 @@
       },
       "reads": [
         "Objective.GuardArea",
-        "Combat.StimulusLocation"
+        "Combat.StimulusLocation",
+        "Weapon.Readiness"
       ],
       "effects": [
         "Planner.Focus = Guard",
-        "Agent.Posture = StandingOrCrouched"
+        "Agent.Posture = StandingOrCrouched",
+        "Weapon.Readiness остается Ready для охраны сектора"
       ]
     },
     "task.MoveToInterestPoint": {
@@ -2162,7 +2249,8 @@
       ],
       "effects": [
         "Planner.Focus = Objective",
-        "Agent.Posture = StandingOrCrouched"
+        "Agent.Posture = StandingOrCrouched",
+        "Weapon.Readiness = Relaxed, если нет actionable threat/stimulus"
       ]
     },
     "task.UpdateThreatMemoryFromWeaponReport": {
@@ -2231,6 +2319,34 @@
         "base": 0
       },
       "effects": []
+    },
+    "task.SetWeaponRelaxed": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetWeaponReadiness",
+      "description": "Опускает оружие, когда нет полезной угрозы, свежего стимула или задачи прикрытия. Не используется внутри активного боя.",
+      "cost": {
+        "base": 2,
+        "formula": "weapon_readiness_transition_cost"
+      },
+      "effects": [
+        "Weapon.Readiness = Relaxed",
+        "Weapon.IsAimedAtThreat = false",
+        "Weapon.FireIntent = None"
+      ]
+    },
+    "task.SetWeaponReady": {
+      "kind": "built_in_or_custom",
+      "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetWeaponReadiness",
+      "description": "Поднимает оружие в состояние готовности без точного прицеливания. Используется при поиске, удержании угла, прикрытии союзника и ожидании контакта.",
+      "cost": {
+        "base": 3,
+        "formula": "weapon_readiness_transition_cost"
+      },
+      "effects": [
+        "Weapon.Readiness = Ready",
+        "Weapon.IsAimedAtThreat = false",
+        "Weapon.FireIntent = None"
+      ]
     }
   },
   "htn_assets": {
@@ -2514,7 +2630,7 @@
           "task_ref": "task.SelectNextPatrolPoint",
           "title": "Select next patrol point",
           "layout": {
-            "col": 1,
+            "col": 2,
             "lane": 1
           }
         },
@@ -2523,7 +2639,7 @@
           "task_ref": "task.SetGaitWalk",
           "title": "Set patrol pace",
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 1
           }
         },
@@ -2532,7 +2648,7 @@
           "task_ref": "task.PatrolMoveToPoint",
           "title": "Move to patrol point",
           "layout": {
-            "col": 3,
+            "col": 4,
             "lane": 1
           }
         },
@@ -2541,14 +2657,27 @@
           "task_ref": "task.GuardAreaObserve",
           "title": "Observe while patrolling",
           "layout": {
-            "col": 4,
+            "col": 5,
             "lane": 1
+          }
+        },
+        "relax_weapon": {
+          "type": "task",
+          "task_ref": "task.SetWeaponRelaxed",
+          "title": "Опустить оружие для патруля",
+          "layout": {
+            "col": 1,
+            "lane": 0
           }
         }
       },
       "edges": [
         {
           "from": "root",
+          "to": "relax_weapon"
+        },
+        {
+          "from": "relax_weapon",
           "to": "select_point"
         },
         {
@@ -2589,7 +2718,7 @@
           "ue_class": "HTNNode_Prefer",
           "title": "Нужен другой guard post?",
           "layout": {
-            "col": 1,
+            "col": 2,
             "lane": 2
           },
           "description": "Проверяет, даст ли новый guard post лучший сектор наблюдения или меньший риск.",
@@ -2622,7 +2751,7 @@
           "task_ref": "task.SetGaitWalk",
           "title": "Set guard movement pace",
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 1
           }
         },
@@ -2631,7 +2760,7 @@
           "task_ref": "task.MoveToGuardPost",
           "title": "Move to guard post",
           "layout": {
-            "col": 3,
+            "col": 4,
             "lane": 1
           }
         },
@@ -2640,14 +2769,27 @@
           "task_ref": "task.GuardAreaObserve",
           "title": "Observe guard sector",
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 3
+          }
+        },
+        "ready_guard": {
+          "type": "task",
+          "task_ref": "task.SetWeaponReady",
+          "title": "Оружие наготове для охраны",
+          "layout": {
+            "col": 1,
+            "lane": 0
           }
         }
       },
       "edges": [
         {
           "from": "root",
+          "to": "ready_guard"
+        },
+        {
+          "from": "ready_guard",
           "to": "prefer_post"
         },
         {
@@ -2694,7 +2836,7 @@
           "task_ref": "task.SetGaitJog",
           "title": "Set travel pace",
           "layout": {
-            "col": 1,
+            "col": 2,
             "lane": 1
           }
         },
@@ -2703,7 +2845,7 @@
           "task_ref": "task.MoveToInterestPoint",
           "title": "Move to point of interest",
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 1
           }
         },
@@ -2712,14 +2854,27 @@
           "task_ref": "task.HoldObjectivePosition",
           "title": "Hold at interest point",
           "layout": {
-            "col": 3,
+            "col": 4,
             "lane": 1
+          }
+        },
+        "relax_weapon": {
+          "type": "task",
+          "task_ref": "task.SetWeaponRelaxed",
+          "title": "Опустить оружие на переходе",
+          "layout": {
+            "col": 1,
+            "lane": 0
           }
         }
       },
       "edges": [
         {
           "from": "root",
+          "to": "relax_weapon"
+        },
+        {
+          "from": "relax_weapon",
           "to": "jog_interest"
         },
         {
@@ -3079,7 +3234,10 @@
           "layout": {
             "col": 6,
             "lane": 0
-          }
+          },
+          "effects": [
+            "Weapon.Readiness = Ready после входа в укрытие, если угроза/стимул еще актуальны"
+          ]
         },
         "wait_cover": {
           "type": "task",
@@ -3774,6 +3932,12 @@
               "cost_bias": "Low when approach route is covered, reveal risk is low, and current distance makes long-range fire unattractive."
             },
             {
+              "branch": "squad_covering_fire",
+              "start_node": "squad_cover_fire",
+              "intent": "Прикрыть союзника, который меняет укрытие или сокращает дистанцию.",
+              "cost_bias": "Низкая стоимость, когда есть запрос Squad.CoveringFireRequest, агент может безопасно открыть короткое подавление и расход ammo приемлем."
+            },
+            {
               "branch": "covered_fire",
               "start_node": "peek",
               "intent": "Probe LOS, then fire a short controlled window from cover if ammo, gait, LOS, and exposure remain valid.",
@@ -3795,6 +3959,24 @@
           "layout": {
             "col": 1,
             "lane": 2
+          }
+        },
+        "squad_cover_fire": {
+          "type": "subnetwork",
+          "ue_class": "HTNNode_SubNetwork",
+          "title": "Прикрыть перебежку союзника",
+          "asset_ref": "HTN.HumanoidCombat.SquadCoveringFire",
+          "decorators": [
+            "decorator.SquadCoveringFireRequested"
+          ],
+          "layout": {
+            "col": 2,
+            "lane": 8
+          },
+          "cost": {
+            "base": 16,
+            "formula": "coordination_penalty + exposure_penalty + ammo_spend_penalty - squad_reposition_success_bonus",
+            "note": "Кандидат выгоден, когда союзник уже бежит между укрытиями, а короткое подавление снижает общий squad risk."
           }
         }
       },
@@ -3917,6 +4099,11 @@
           "from": "choose_combat_plan",
           "to": "fallback_survive",
           "branch": "candidate: survival fallback"
+        },
+        {
+          "from": "choose_combat_plan",
+          "to": "squad_cover_fire",
+          "branch": "candidate: squad covering fire"
         }
       ]
     },
@@ -4156,7 +4343,7 @@
             "decorator.HasRecentWeaponReport"
           ],
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 0
           }
         },
@@ -4165,7 +4352,7 @@
           "ue_class": "HTNNode_Prefer",
           "title": "Был impact или near miss?",
           "layout": {
-            "col": 2,
+            "col": 3,
             "lane": 3
           },
           "description": "Использует попадание рядом или near miss как направление опасности.",
@@ -4199,7 +4386,7 @@
             "decorator.HasRecentImpactOrNearMiss"
           ],
           "layout": {
-            "col": 3,
+            "col": 4,
             "lane": 1
           }
         },
@@ -4208,7 +4395,7 @@
           "ue_class": "HTNNode_Prefer",
           "title": "Союзник под огнем?",
           "layout": {
-            "col": 3,
+            "col": 4,
             "lane": 4
           },
           "description": "Использует попадание или near miss союзника как боевой сигнал без прямого восприятия стрелка.",
@@ -4240,7 +4427,7 @@
             "decorator.HasRecentAllyHitReaction"
           ],
           "layout": {
-            "col": 4,
+            "col": 6,
             "lane": 2
           }
         },
@@ -4249,7 +4436,7 @@
           "ue_class": "HTNNode_Prefer",
           "title": "Есть другой свежий стимул?",
           "layout": {
-            "col": 4,
+            "col": 6,
             "lane": 5
           },
           "description": "Использует общий подозрительный стимул только когда более точного сигнала нет.",
@@ -4282,7 +4469,7 @@
             "decorator.HasRecentStimulus"
           ],
           "layout": {
-            "col": 5,
+            "col": 7,
             "lane": 4
           }
         },
@@ -4294,7 +4481,7 @@
             "decorator.HasActionableStimulusOrLKP"
           ],
           "layout": {
-            "col": 6,
+            "col": 8,
             "lane": 2
           }
         },
@@ -4303,7 +4490,7 @@
           "ue_class": "HTNNode_Prefer",
           "title": "Продолжать поиск?",
           "layout": {
-            "col": 6,
+            "col": 8,
             "lane": 4
           },
           "description": "Разрешает осторожный поиск, пока информация свежая и следующий шаг безопасен.",
@@ -4336,7 +4523,7 @@
           "task_ref": "task.SetGaitJog",
           "title": "Set cautious search pace",
           "layout": {
-            "col": 7,
+            "col": 9,
             "lane": 3
           }
         },
@@ -4349,7 +4536,7 @@
             "decorator.CoverRouteAcceptable"
           ],
           "layout": {
-            "col": 8,
+            "col": 10,
             "lane": 3
           }
         },
@@ -4359,8 +4546,26 @@
           "title": "Return to objective alerted",
           "description": "Не преследует слабую или устаревшую информацию.",
           "layout": {
-            "col": 8,
+            "col": 10,
             "lane": 5
+          }
+        },
+        "ready_scan": {
+          "type": "task",
+          "task_ref": "task.SetWeaponReady",
+          "title": "Держать оружие наготове",
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "ready_search": {
+          "type": "task",
+          "task_ref": "task.SetWeaponReady",
+          "title": "Оружие наготове для поиска",
+          "layout": {
+            "col": 5,
+            "lane": 1
           }
         }
       },
@@ -4376,8 +4581,11 @@
         },
         {
           "from": "weapon_report_memory",
-          "to": "hold_angle",
-          "order": 1
+          "to": "ready_scan"
+        },
+        {
+          "from": "ready_scan",
+          "to": "hold_angle"
         },
         {
           "from": "prefer_stimulus",
@@ -4391,8 +4599,7 @@
         },
         {
           "from": "impact_memory",
-          "to": "hold_angle",
-          "order": 1
+          "to": "ready_scan"
         },
         {
           "from": "prefer_impact",
@@ -4406,8 +4613,7 @@
         },
         {
           "from": "ally_hit_memory",
-          "to": "hold_angle",
-          "order": 1
+          "to": "ready_scan"
         },
         {
           "from": "prefer_ally_hit",
@@ -4421,8 +4627,7 @@
         },
         {
           "from": "generic_stimulus_memory",
-          "to": "hold_angle",
-          "order": 1
+          "to": "ready_scan"
         },
         {
           "from": "prefer_generic_stimulus",
@@ -4436,8 +4641,12 @@
         },
         {
           "from": "prefer_pursue",
-          "to": "jog_search_step",
+          "to": "ready_search",
           "branch": "top: actionable stimulus or LKP"
+        },
+        {
+          "from": "ready_search",
+          "to": "jog_search_step"
         },
         {
           "from": "jog_search_step",
@@ -4967,6 +5176,115 @@
           "branch": "bottom: no fire opportunity"
         }
       ]
+    },
+    "HTN.HumanoidCombat.SquadCoveringFire": {
+      "title": "Squad covering fire",
+      "description": "Короткое прикрытие союзника, который перебегает между укрытиями или сокращает дистанцию.",
+      "root_node": "root",
+      "nodes": {
+        "root": {
+          "type": "root",
+          "ue_class": "HTN Root",
+          "title": "Прикрытие союзника: вход",
+          "services": [
+            "service.UpdateThreatFacts",
+            "service.SquadFactSync",
+            "service.UpdateAmmoPressure"
+          ],
+          "layout": {
+            "col": 0,
+            "lane": 0
+          }
+        },
+        "walk_for_cover": {
+          "type": "task",
+          "task_ref": "task.SetGaitWalk",
+          "title": "Темп для огня",
+          "layout": {
+            "col": 1,
+            "lane": 0
+          }
+        },
+        "ready_weapon": {
+          "type": "task",
+          "task_ref": "task.SetWeaponReady",
+          "title": "Оружие наготове",
+          "layout": {
+            "col": 2,
+            "lane": 0
+          }
+        },
+        "aim_lane": {
+          "type": "task",
+          "task_ref": "task.AimWeaponAtThreat",
+          "title": "Навести оружие в сектор прикрытия",
+          "decorators": [
+            "decorator.NotSprintingForFire"
+          ],
+          "layout": {
+            "col": 3,
+            "lane": 0
+          }
+        },
+        "suppress_lane": {
+          "type": "task",
+          "task_ref": "task.StartSuppressiveFire",
+          "title": "Коротко прикрыть огнем",
+          "decorators": [
+            "decorator.SquadCoveringFireRequested",
+            "decorator.WeaponCanFire",
+            "decorator.CanExposeForShot"
+          ],
+          "layout": {
+            "col": 4,
+            "lane": 0
+          }
+        },
+        "stop_fire": {
+          "type": "task",
+          "task_ref": "task.StopWeaponFire",
+          "title": "Вернуться в готовность",
+          "layout": {
+            "col": 5,
+            "lane": 0
+          }
+        },
+        "reassess": {
+          "type": "task",
+          "task_ref": "task.WaitInCoverReassess",
+          "title": "Переоценить после прикрытия",
+          "layout": {
+            "col": 6,
+            "lane": 0
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "root",
+          "to": "walk_for_cover"
+        },
+        {
+          "from": "walk_for_cover",
+          "to": "ready_weapon"
+        },
+        {
+          "from": "ready_weapon",
+          "to": "aim_lane"
+        },
+        {
+          "from": "aim_lane",
+          "to": "suppress_lane"
+        },
+        {
+          "from": "suppress_lane",
+          "to": "stop_fire"
+        },
+        {
+          "from": "stop_fire",
+          "to": "reassess"
+        }
+      ]
     }
   },
   "use_cases": {
@@ -5068,7 +5386,8 @@
         "Weapon.EstimatedSecondsToEmpty": 1.6,
         "Weapon.ReloadLeadTimeSec": 3,
         "Weapon.AmmoPressure": 0.82,
-        "Combat.LKPAgeSec": 0
+        "Combat.LKPAgeSec": 0,
+        "Weapon.Readiness": "Aiming"
       },
       "expected_plan_shape": [
         "Handle confirmed contact",
@@ -5079,11 +5398,17 @@
         "Stop fire before fast move",
         "Fast move to reload cover",
         "Move to reload cover",
-        "Reload after reaching cover"
+        "Reload after reaching cover",
+        "Вернуться в готовность"
       ],
       "should_not_plan": [
         "SwitchToSidearm не нужен: основное оружие еще не пустое.",
         "ReloadWeapon на открытом месте не должен строиться, пока SafeReloadWindow false."
+      ],
+      "readiness_expectations": [
+        "Во время огня оружие может быть Aiming.",
+        "Перед Sprint к reload cover огонь останавливается, Aiming сбрасывается.",
+        "После перезарядки оружие остается Ready, пока контакт актуален; Relaxed возможен только после возврата к спокойной задаче."
       ]
     },
     "case.HeardNoiseNoVisual": {
@@ -5188,6 +5513,117 @@
         "Lost-contact search, потому что цель видима/подтверждена."
       ],
       "cost_notes": "Скрытое сближение выигрывает, когда риск раскрытия низкий, а дальний прямой огонь слишком рано раскрывает сквад и имеет высокий cost из-за дистанции."
+    },
+    "case.IncomingFireUnknownSourceTakeCoverThenScan": {
+      "title": "Патруль/охрана: по агенту стреляют, источник пока не подтвержден",
+      "initial_worldstate": {
+        "Objective.CurrentKind": "PatrolRoute",
+        "Combat.ThreatConfirmed": false,
+        "Combat.ThreatConfidence": 0.36,
+        "Combat.IncomingFire": 0.78,
+        "Combat.ExpectedDeathRisk": 0.66,
+        "Combat.CurrentPositionSurvivability": 0.28,
+        "Combat.WeaponReportLocation": "примерное направление выстрела",
+        "Combat.WeaponReportAgeSec": 0.7,
+        "Combat.WeaponReportConfidence": 0.45,
+        "Weapon.Readiness": "Relaxed",
+        "Weapon.AmmoInMag": 17
+      },
+      "expected_plan_shape": [
+        "HTN.Humanoid.Root",
+        "React to threat / stimulus",
+        "Survive immediate threat",
+        "Find safe cover candidates",
+        "Fast move to cover",
+        "Enter cover stance",
+        "Wait in cover and reassess",
+        "Handle lost contact or sound",
+        "Use weapon report origin",
+        "Держать оружие наготове",
+        "Hold angle and scan"
+      ],
+      "should_not_plan": [
+        "StartControlledFire без подтвержденной угрозы.",
+        "Sprint прямо к source без укрытия и без SearchAnchor.",
+        "SetWeaponRelaxed пока IncomingFire или свежий WeaponReport еще актуальны."
+      ],
+      "readiness_expectations": [
+        "До стимула Weapon.Readiness может быть Relaxed.",
+        "После входящего огня readiness должен стать Ready до сканирования.",
+        "Aiming допустим только на короткое окно проверки/огня, не как постоянное состояние после потери контакта."
+      ],
+      "analysis_notes": "Этот case проверяет, что тактическое прерывание перебивает patrol/guard, но не превращает примерное направление выстрела в точную видимую цель."
+    },
+    "case.EnemyTurnsCornerHoldAngleBeforePursuit": {
+      "title": "Перестрелка: угроза ушла за угол",
+      "initial_worldstate": {
+        "Combat.ThreatConfirmed": false,
+        "Combat.ThreatConfidence": 0.52,
+        "Combat.LOSQuality": 0,
+        "Combat.LKPAgeSec": 1.2,
+        "Combat.SearchAnchor": "последний угол, куда ушла угроза",
+        "Combat.CoverRouteRisk": 0.42,
+        "Weapon.Readiness": "Aiming",
+        "Weapon.AmmoInMag": 12
+      },
+      "expected_plan_shape": [
+        "Handle lost contact or sound",
+        "Держать оружие наготове",
+        "Hold angle and scan",
+        "Продолжать поиск?",
+        "Оружие наготове для поиска",
+        "Cautious cover-to-cover search step"
+      ],
+      "should_not_plan": [
+        "Sprint за угол сразу после потери LOS.",
+        "StartControlledFire без нового LOS sample.",
+        "SetWeaponRelaxed до устаревания LKP/SearchAnchor."
+      ],
+      "readiness_expectations": [
+        "После потери LOS агент выходит из Aiming в Ready, чтобы держать угол без вечного прицеливания.",
+        "Перед коротким search step оружие остается Ready.",
+        "Aiming возвращается только если Peek/LOS снова подтверждает угрозу."
+      ],
+      "analysis_notes": "Главная проверка: потеря LOS не должна превращаться в бездумное преследование. Сначала удержание угла, затем короткий безопасный шаг или обход."
+    },
+    "case.SquadCoveringFireForAllyReposition": {
+      "title": "Сквад: один агент перебегает, другой кратко прикрывает огнем",
+      "initial_worldstate": {
+        "Combat.ThreatConfirmed": true,
+        "Combat.ThreatConfidence": 0.82,
+        "Combat.LOSQuality": 0.55,
+        "Combat.CanExposeForShot": true,
+        "Combat.ExpectedDeathRisk": 0.34,
+        "Squad.CoveringFireRequest": true,
+        "Squad.TeammateRepositioning": true,
+        "Squad.CoveringFireLane": "сектор угрозы, опасный для союзника",
+        "Weapon.Readiness": "Ready",
+        "Weapon.CanFire": true,
+        "Weapon.AmmoInMag": 18,
+        "Agent.MovementGait": "Walk",
+        "Agent.CanFireInCurrentGait": true
+      },
+      "expected_plan_shape": [
+        "Handle confirmed contact",
+        "Choose lowest-risk confirmed-contact plan",
+        "candidate: squad covering fire",
+        "Прикрыть перебежку союзника",
+        "Оружие наготове",
+        "Навести оружие в сектор прикрытия",
+        "Коротко прикрыть огнем",
+        "Вернуться в готовность"
+      ],
+      "should_not_plan": [
+        "Длинная непрерывная стрельба до пустого магазина.",
+        "Sprint у прикрывающего агента во время окна огня.",
+        "Aiming остается навсегда после завершения прикрытия."
+      ],
+      "readiness_expectations": [
+        "Covering agent начинает из Ready.",
+        "На короткое suppress окно переходит в Aiming.",
+        "После StopWeaponFire возвращается в Ready и ждет replan."
+      ],
+      "cost_notes": "Кандидат должен выигрывать только если короткая exposure прикрывающего дешевле, чем риск союзника без прикрытия. AmmoPressure и CanExposeForShot ограничивают повторение."
     }
   },
   "blackboard_audit": {
@@ -5248,7 +5684,8 @@
       "ReloadCoverCandidate -> Weapon.ReloadCoverCandidate",
       "CoverQuality -> Combat.CurrentPositionSurvivability",
       "SpareMagazines -> Weapon.HasSpareMagazine",
-      "ShouldReloadEarly -> Weapon.ShouldReloadEarly"
+      "ShouldReloadEarly -> Weapon.ShouldReloadEarly",
+      "WeaponReadiness -> Weapon.Readiness"
     ]
   }
 }

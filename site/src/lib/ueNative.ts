@@ -311,7 +311,20 @@ const NODE_TITLE_RU: Record<string, string> = {
   "Prefer early reload policy": "Перезарядка заранее",
   "Reload weapon": "Перезарядить оружие",
   "Tactical reload early": "Тактическая перезарядка заранее",
-  "Reduce exposure without reload": "Снизить риск без перезарядки"
+  "Reduce exposure without reload": "Снизить риск без перезарядки",
+  "Опустить оружие для патруля": "Опустить оружие для патруля",
+  "Оружие наготове для охраны": "Оружие наготове для охраны",
+  "Опустить оружие на переходе": "Опустить оружие на переходе",
+  "Держать оружие наготове": "Держать оружие наготове",
+  "Оружие наготове для поиска": "Оружие наготове для поиска",
+  "Прикрыть перебежку союзника": "Прикрыть перебежку союзника",
+  "Прикрытие союзника: вход": "Прикрытие союзника: вход",
+  "Темп для огня": "Темп для огня",
+  "Оружие наготове": "Оружие наготове",
+  "Навести оружие в сектор прикрытия": "Навести оружие в сектор прикрытия",
+  "Коротко прикрыть огнем": "Коротко прикрыть огнем",
+  "Вернуться в готовность": "Вернуться в готовность",
+  "Переоценить после прикрытия": "Переоценить после прикрытия"
 };
 
 const NODE_BODY_RU: Record<string, string> = {
@@ -360,7 +373,9 @@ const NODE_BODY_RU: Record<string, string> = {
   "Prefer cautious pursuit": "Преследование разрешено только пока LKP свежая и маршрут не слишком опасен.",
   "Prefer sidearm when reload unsafe": "Когда основное оружие пустое, а перезарядка сейчас слишком опасна.",
   "Prefer cover before reload": "Если ammo pressure высокий, агент заранее идет к укрытию, чтобы не остаться пустым в открытом месте.",
-  "Prefer safe reload": "Перезарядка разрешена только в безопасном окне или при отсутствии лучших вариантов."
+  "Prefer safe reload": "Перезарядка разрешена только в безопасном окне или при отсутствии лучших вариантов.",
+  "Прикрыть перебежку союзника": "Кандидат боевого плана: короткое прикрытие союзника, который меняет укрытие или сокращает дистанцию.",
+  "Прикрытие союзника: вход": "Отдельный HTN asset для covering fire без превращения этого поведения в бесконечную стрельбу."
 };
 
 const TASK_TITLE_RU: Record<string, string> = {
@@ -368,6 +383,8 @@ const TASK_TITLE_RU: Record<string, string> = {
   "task.SetGaitWalk": "Задать темп движения",
   "task.SetGaitJog": "Задать тактический темп",
   "task.SetGaitSprint": "Задать быстрый темп",
+  "task.SetWeaponRelaxed": "Опустить оружие",
+  "task.SetWeaponReady": "Держать оружие наготове",
   "task.AimWeaponAtThreat": "Навести оружие на цель",
   "task.StartControlledFire": "Начать контролируемый огонь",
   "task.StartSuppressiveFire": "Начать подавляющий огонь",
@@ -410,7 +427,9 @@ const TASK_BODY_RU: Record<string, string> = {
   "task.SetGaitWalk": "Задает Agent.MovementGait = Walk как факт планирования: окно огня будет медленнее быстрых перемещений.",
   "task.SetGaitJog": "Задает Agent.MovementGait = Jog для короткого тактического перемещения без текущего окна огня.",
   "task.SetGaitSprint": "Задает Agent.MovementGait = Sprint для быстрого ухода или достижения укрытия; кандидаты огня должны быть неактивны.",
-  "task.AimWeaponAtThreat": "Наводит оружие на цель или позицию угрозы перед началом огня.",
+  "task.SetWeaponRelaxed": "Опускает оружие, когда нет полезной угрозы, свежего стимула или задачи прикрытия.",
+  "task.SetWeaponReady": "Поднимает оружие в Ready без точного прицеливания: поиск, удержание угла, охрана или прикрытие.",
+  "task.AimWeaponAtThreat": "Переводит оружие в Aiming и наводит его на цель, threat point или сектор прикрытия.",
   "task.StartControlledFire": "Начинает короткое контролируемое окно стрельбы; требует Walk и валидный LOS.",
   "task.StartSuppressiveFire": "Начинает короткое подавление, чтобы снизить риск маршрута.",
   "task.StopWeaponFire": "Гасит намерение стрелять перед быстрым движением, перезарядкой, сменой оружия или окончанием экспозиции.",
@@ -476,7 +495,8 @@ const DECORATOR_LABEL_RU: Record<string, string> = {
   "decorator.SprintAllowedNoImmediateFire": "быстрое движение допустимо",
   "decorator.NeedsCombatAmmoAction": "оружие требует ammo-реакции",
   "decorator.PrimaryEmptyReloadUnsafe": "основное оружие пустое, перезарядка опасна",
-  "decorator.NoGrenadeOrImmediateFlush": "укрытие можно держать"
+  "decorator.NoGrenadeOrImmediateFlush": "укрытие можно держать",
+  "decorator.SquadCoveringFireRequested": "нужно прикрыть союзника"
 };
 
 const SERVICE_LABEL_RU: Record<string, string> = {
