@@ -966,6 +966,83 @@ input {
   gap: 8px;
 }
 
+.variable-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.variable-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variable-group-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  border-left: 4px solid #0ea5e9;
+  padding-left: 9px;
+}
+
+.variable-group-head h3 {
+  margin: 0;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.variable-group-head p {
+  margin: 2px 0 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.variable-group-head span,
+.side-role {
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.variable-hint .variable-group-head {
+  border-left-color: #a855f7;
+}
+
+.variable-config .variable-group-head {
+  border-left-color: #f97316;
+}
+
+.variable-telemetry .variable-group-head {
+  border-left-color: #64748b;
+}
+
+.side-role {
+  align-self: flex-start;
+}
+
+.side-world-hint .side-role {
+  background: #f3e8ff;
+  color: #7e22ce;
+}
+
+.side-world-config .side-role {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.side-world-telemetry .side-role {
+  background: #e2e8f0;
+  color: #475569;
+}
+
 .method-row,
 .decomp-row,
 .side-row {

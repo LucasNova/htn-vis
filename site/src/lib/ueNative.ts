@@ -87,10 +87,16 @@ export type UeWorldKey = JsonRecord & {
   type?: string;
   description?: string;
   source?: string;
+  runtime_role?: UeWorldKeyRole;
+  role_label?: string;
+  role_note?: string;
+  computed_from?: string[];
   range?: [number, number];
   values?: string[];
   aliases?: string[];
 };
+
+export type UeWorldKeyRole = "blackboard" | "hint" | "config" | "telemetry";
 
 export type UeCost = {
   base?: number;

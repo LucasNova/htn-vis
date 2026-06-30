@@ -38,7 +38,8 @@ import {
   type UeService,
   type UeTaskSpec,
   type UeUseCase,
-  type UeWorldKey
+  type UeWorldKey,
+  type UeWorldKeyRole
 } from "./lib/ueNative";
 
 const DEFAULT_MODEL_URL = `${import.meta.env.BASE_URL}data/humanoid_ue_htn_model_v1.json`;
@@ -105,7 +106,7 @@ const App: Component = () => {
     return buildNativeLayout(currentModel, assetId());
   });
 
-  const filteredWorld = createMemo(() => objectEntries(model()?.worldstate_keys ?? {}));
+  const filteredWorldGroups = createMemo(() => groupWorldKeys(objectEntries(model()?.worldstate_keys ?? {})));
   const filteredCases = createMemo(() => objectEntries(model()?.use_cases ?? {}));
   const assetCrumbs = createMemo(() => {
     const currentModel = model();
@@ -391,7 +392,7 @@ const App: Component = () => {
               Детали
             </button>
             <button class={tab() === "world" ? "tab tab-active" : "tab"} type="button" onClick={() => setTab("world")}>
-              Blackboard keys
+              Variables
             </button>
             <button class={tab() === "cases" ? "tab tab-active" : "tab"} type="button" onClick={() => setTab("cases")}>
               Use cases
@@ -411,11 +412,10 @@ const App: Component = () => {
             />
           </Show>
           <Show when={tab() === "world"}>
-            <RegistryPanel
+            <WorldVariablePanel
               icon={<Database size={16} />}
-              title="Blackboard keys"
-              entries={filteredWorld()}
-              kind="world"
+              title="Blackboard / hints"
+              groups={filteredWorldGroups()}
               onSelect={(ref) => {
                 replaceDetails({ kind: "world", ref });
               }}
@@ -704,7 +704,7 @@ function selectionKindLabel(kind: NativeSelection["kind"]): string {
     decorator: "decorator",
     service: "service",
     task: "task",
-    world: "Blackboard key",
+    world: "variable",
     use_case: "use case",
     cost_model: "cost model",
     contract: "contract"
@@ -857,7 +857,7 @@ const NodeDetails: Component<{
           </div>
           <Show when={node()!.reads}>
             <div class="mt-2">
-              <div class="detail-subtitle">Blackboard keys</div>
+              <div class="detail-subtitle">Variables</div>
               <ValueView value={node()!.reads} />
             </div>
           </Show>
@@ -1021,13 +1021,24 @@ const WorldKeyDetails: Component<{ refId: string; worldKey: UeWorldKey | undefin
     <Show when={props.worldKey?.description}>
       <p class="detail-copy">{props.worldKey?.description}</p>
     </Show>
-    <DetailSection title="Blackboard key">
+    <DetailSection title="Variable">
       <div class="kv-list">
         <KeyValue name="type" value={props.worldKey?.type} />
+        <KeyValue name="role" value={worldRoleLabel(worldRoleOf(props.worldKey))} />
         <KeyValue name="source" value={props.worldKey?.source} />
         <KeyValue name="range" value={props.worldKey?.range} />
       </div>
     </DetailSection>
+    <Show when={props.worldKey?.role_note}>
+      <DetailSection title="Роль в реализации">
+        <ValueView value={props.worldKey?.role_note} />
+      </DetailSection>
+    </Show>
+    <Show when={props.worldKey?.computed_from?.length}>
+      <DetailSection title="Вычисляется из" count={props.worldKey?.computed_from?.length ?? 0}>
+        <ValueView value={props.worldKey?.computed_from} />
+      </DetailSection>
+    </Show>
     <Show when={props.worldKey?.values?.length}>
       <DetailSection title="Values" count={props.worldKey?.values?.length ?? 0}>
         <ValueView value={props.worldKey?.values} />
@@ -1038,7 +1049,7 @@ const WorldKeyDetails: Component<{ refId: string; worldKey: UeWorldKey | undefin
         <ValueView value={props.worldKey?.aliases} />
       </DetailSection>
     </Show>
-    <GenericDetails entity={props.worldKey} skip={["type", "source", "description", "range", "values", "aliases"]} />
+    <GenericDetails entity={props.worldKey} skip={["type", "source", "description", "runtime_role", "role_label", "role_note", "computed_from", "range", "values", "aliases"]} />
   </>
 );
 
@@ -1094,6 +1105,82 @@ const GenericDetails: Component<{ entity: unknown; skip?: string[] }> = (props) 
   </For>
 );
 
+type WorldVariableGroup = {
+  role: UeWorldKeyRole;
+  title: string;
+  description: string;
+  entries: [string, unknown][];
+};
+
+const WORLD_ROLE_ORDER: UeWorldKeyRole[] = ["blackboard", "hint", "config", "telemetry"];
+
+const WORLD_ROLE_META: Record<UeWorldKeyRole, { title: string; countForms: [string, string, string]; description: string }> = {
+  blackboard: {
+    title: "Blackboard keys",
+    countForms: ["ключ", "ключа", "ключей"],
+    description: "Реальные runtime facts и выбранные outputs плана: хранить в UE Blackboard или HTN worldstate."
+  },
+  hint: {
+    title: "Hint variables",
+    countForms: ["подсказка", "подсказки", "подсказок"],
+    description: "Вычисляемые helper-значения для decorators, scoring, cost и объяснения графа."
+  },
+  config: {
+    title: "Config / thresholds",
+    countForms: ["настройка", "настройки", "настроек"],
+    description: "Tuning values: лучше держать в data asset, профиле оружия или настройках service/decorator."
+  },
+  telemetry: {
+    title: "Telemetry",
+    countForms: ["ключ", "ключа", "ключей"],
+    description: "Отладочные значения для visual logger и анализа, не gameplay-факты."
+  }
+};
+
+const WorldVariablePanel: Component<{
+  icon: JSX.Element;
+  title: string;
+  groups: WorldVariableGroup[];
+  onSelect: (ref: string) => void;
+}> = (props) => (
+  <div class="list-panel">
+    <div class="list-panel-head">
+      {props.icon}
+      <div>
+        <h2>{props.title}</h2>
+        <p>{variableTotalLabel(props.groups)}</p>
+      </div>
+    </div>
+    <div class="variable-groups">
+      <For each={props.groups}>
+        {(group) => (
+          <section class={`variable-group variable-${group.role}`}>
+            <div class="variable-group-head">
+              <div>
+                <h3>{group.title}</h3>
+                <p>{group.description}</p>
+              </div>
+              <span>{roleCountLabel(group.entries.length, group.role)}</span>
+            </div>
+            <div class="side-list">
+              <For each={group.entries}>
+                {([id, value]) => (
+                  <button class={`side-row side-world side-world-${group.role}`} type="button" onClick={() => props.onSelect(id)}>
+                    <strong>{displayTitle(id, value, "world")}</strong>
+                    <code>{id}</code>
+                    <span class="side-role">{worldRoleLabel(group.role)}</span>
+                    <span>{displaySummary(value)}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </section>
+        )}
+      </For>
+    </div>
+  </div>
+);
+
 const RegistryPanel: Component<{
   icon: JSX.Element;
   title: string;
@@ -1135,6 +1222,41 @@ function registryCountLabel(count: number, kind: NativeSelection["kind"]) {
     contract: ["контракт", "контракта", "контрактов"]
   };
   return `${count} ${pluralRu(count, forms[kind])}`;
+}
+
+function groupWorldKeys(entries: [string, unknown][]): WorldVariableGroup[] {
+  return WORLD_ROLE_ORDER.map((role) => {
+    const meta = WORLD_ROLE_META[role];
+    return {
+      role,
+      title: meta.title,
+      description: meta.description,
+      entries: entries.filter(([, value]) => worldRoleOf(value) === role)
+    };
+  }).filter((group) => group.entries.length > 0);
+}
+
+function worldRoleOf(value: unknown): UeWorldKeyRole {
+  if (value && typeof value === "object") {
+    const role = (value as UeWorldKey).runtime_role;
+    if (role === "blackboard" || role === "hint" || role === "config" || role === "telemetry") return role;
+  }
+  return "blackboard";
+}
+
+function worldRoleLabel(role: UeWorldKeyRole | undefined) {
+  return WORLD_ROLE_META[role ?? "blackboard"].title.replace(/s$/, "");
+}
+
+function roleCountLabel(count: number, role: UeWorldKeyRole) {
+  return `${count} ${pluralRu(count, WORLD_ROLE_META[role].countForms)}`;
+}
+
+function variableTotalLabel(groups: WorldVariableGroup[]) {
+  const total = groups.reduce((sum, group) => sum + group.entries.length, 0);
+  const hints = groups.find((group) => group.role === "hint")?.entries.length ?? 0;
+  const blackboard = groups.find((group) => group.role === "blackboard")?.entries.length ?? 0;
+  return `${roleCountLabel(blackboard, "blackboard")} / ${roleCountLabel(hints, "hint")} / ${total} всего`;
 }
 
 function pluralRu(count: number, [one, few, many]: [string, string, string]) {

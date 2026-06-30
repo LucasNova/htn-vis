@@ -111,7 +111,10 @@
     "SelfLocation": {
       "type": "Vector",
       "source": "HTN built-in Blackboard key",
-      "description": "Автоматический Blackboard key HTN: текущая позиция управляемого pawn. Используется для планирования дистанций, маршрутов и проверки укрытий."
+      "description": "Автоматический Blackboard key HTN: текущая позиция управляемого pawn. Используется для планирования дистанций, маршрутов и проверки укрытий.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.CurrentKind": {
       "type": "Enum",
@@ -123,27 +126,42 @@
         "None"
       ],
       "description": "Текущая небоевая назначенная задача агента или сквада. По ней root выбирает patrol, guard, move-to-interest или удержание позиции.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.TargetLocation": {
       "type": "Vector",
       "description": "Целевая точка текущей назначенной задачи: patrol waypoint, точка интереса, guard focus или временная позиция удержания.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.PatrolRoute": {
       "type": "Object",
       "description": "Данные или handle маршрута патруля. Используется только когда Objective.CurrentKind указывает на patrol.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.GuardArea": {
       "type": "Object",
       "description": "Область, volume или anchor для поведения охраны. Guard subnetwork выбирает внутри нее полезный пост и сектор наблюдения.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.InterestPoint": {
       "type": "Object",
       "description": "Точка интереса для обычной назначенной задачи вне подтвержденного боя.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.Priority": {
       "type": "Float",
@@ -152,12 +170,18 @@
         1
       ],
       "description": "Насколько важно сохранять текущую небоевую задача-задачу, когда нет срочного тактическое прерывание.",
-      "source": "Назначение задачи / service.UpdateObjectiveFacts"
+      "source": "Назначение задачи / service.UpdateObjectiveFacts",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ThreatActor": {
       "type": "Actor",
       "description": "Актер текущей подтвержденной угрозы, если он видим или недавно подтвержден damage/near miss/squad fact.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ThreatLocation": {
       "type": "Vector",
@@ -165,22 +189,37 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ThreatLocation"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ThreatLocationMoveDelta": {
       "type": "Float",
       "description": "Насколько принятая ThreatLocation сместилась с последнего тактического sample. Защищает planner от replan на каждое микро-движение.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.ThreatLocation"
+      ]
     },
     "Combat.ThreatLocationReplanThreshold": {
       "type": "Float",
       "description": "Минимальное значимое смещение ThreatLocation в метрах, после которого можно просить replan.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "config",
+      "role_label": "Config / threshold",
+      "role_note": "Настройка, threshold или weapon/AI tuning value. Лучше держать в data asset, настройках сервиса или профиле оружия, а не как per-agent Blackboard key."
     },
     "Combat.ThreatLocationReplanMinIntervalSec": {
       "type": "Float",
       "description": "Минимальный интервал между replans по изменению ThreatLocation, чтобы движущаяся цель не вызывала planning thrash.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "config",
+      "role_label": "Config / threshold",
+      "role_note": "Настройка, threshold или weapon/AI tuning value. Лучше держать в data asset, настройках сервиса или профиле оружия, а не как per-agent Blackboard key."
     },
     "Combat.ThreatConfidence": {
       "type": "Float",
@@ -192,7 +231,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ThreatConfidence"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.LKPAgeSec": {
       "type": "Float",
@@ -200,7 +242,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "LKPAgeSec"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.LOSQuality": {
       "type": "Float",
@@ -212,7 +257,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "LOSQuality"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.IncomingFire": {
       "type": "Float",
@@ -224,7 +272,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "IncomingFire"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ExpectedDeathRisk": {
       "type": "Float",
@@ -236,7 +287,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ExpectedDeathRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.CurrentPositionSurvivability": {
       "type": "Float",
@@ -248,7 +302,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "CoverQuality"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.CoverRouteRisk": {
       "type": "Float",
@@ -260,7 +317,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "CoverRouteRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.ReappearanceRisk": {
       "type": "Float",
@@ -269,7 +329,10 @@
         1
       ],
       "description": "Риск, что угроза быстро появится из угла, двери, высоты или фланга пока агент выполняет действие.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.DistanceToThreat": {
       "type": "Float",
@@ -277,6 +340,13 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "DistanceToThreat"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "SelfLocation",
+        "Combat.ThreatLocation"
       ]
     },
     "Combat.ThreatAwarenessOfAgent": {
@@ -289,7 +359,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ThreatAwareOfAgent"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.ThreatFacingAgent": {
       "type": "Float",
@@ -301,7 +374,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ThreatFacingAgent"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.SelectedCover": {
       "type": "Object",
@@ -309,22 +385,34 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "SafeCoverCandidate"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.SelectedCoverLocation": {
       "type": "Vector",
       "description": "Move target для Combat.SelectedCover.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ReservedCoverId": {
       "type": "Name",
       "description": "Токен резервации укрытия, чтобы участники сквада не занимали один и тот же слот.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.PeekLocation": {
       "type": "Vector",
       "description": "Временная точка короткой экспозиции, откуда агент может проверить LOS или сделать короткий выстрел.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.SearchAnchor": {
       "type": "Vector",
@@ -332,7 +420,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "SearchAnchor"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.PreferredAttackPosition": {
       "type": "Vector",
@@ -340,7 +431,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "CoveredAttackPosition"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ApproachRouteRisk": {
       "type": "Float",
@@ -352,7 +446,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ApproachRouteRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.StimulusLocation": {
       "type": "Vector",
@@ -360,7 +457,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "StimulusLocation"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.StimulusAgeSec": {
       "type": "Float",
@@ -368,7 +468,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "StimulusAgeSec"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.StimulusKind": {
       "type": "Enum",
@@ -381,7 +484,10 @@
         "SuspiciousNoise"
       ],
       "description": "Тип стимула, который сейчас ведет investigation/search.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.WeaponReportLocation": {
       "type": "Vector",
@@ -389,7 +495,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "WeaponReportLocation"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.WeaponReportAgeSec": {
       "type": "Float",
@@ -397,7 +506,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "WeaponReportAgeSec"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.WeaponReportConfidence": {
       "type": "Float",
@@ -406,7 +518,10 @@
         1
       ],
       "description": "Уверенность в origin звука оружия; снижается из-за эха, occlusion и неопределенности.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.BulletImpactLocation": {
       "type": "Vector",
@@ -414,12 +529,18 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "ImpactLocation"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.BulletImpactAgeSec": {
       "type": "Float",
       "description": "Сколько секунд прошло с nearby bullet impact.",
-      "source": "Память боя / perception services / tactical tasks"
+      "source": "Память боя / perception services / tactical tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.NearMissDirection": {
       "type": "Vector",
@@ -427,7 +548,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "NearMissDirection"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.NearMissAgeSec": {
       "type": "Float",
@@ -435,7 +559,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "NearMissAgeSec"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.AllyHitReactionLocation": {
       "type": "Vector",
@@ -443,7 +570,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "AllyHitReactionLocation"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.AllyHitReactionAgeSec": {
       "type": "Float",
@@ -451,7 +581,10 @@
       "source": "Память боя / perception services / tactical tasks",
       "aliases": [
         "AllyHitReactionAgeSec"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.AmmoInMag": {
       "type": "Int",
@@ -460,12 +593,18 @@
       "aliases": [
         "AmmoInMag",
         "PrimaryAmmoInMag"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.MagCapacity": {
       "type": "Int",
       "description": "Размер магазина активного оружия.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.HasSpareMagazine": {
       "type": "Bool",
@@ -473,7 +612,10 @@
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
       "aliases": [
         "SpareMagazines"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.HasSidearmReady": {
       "type": "Bool",
@@ -482,17 +624,32 @@
       "aliases": [
         "HasSidearm",
         "SidearmReady"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.SafeReloadWindow": {
       "type": "Bool",
       "description": "Перезарядка достаточно безопасна с учетом укрытия, уверенности угрозы, exposure, incoming fire и длительности перезарядки.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.CurrentPositionSurvivability",
+        "Combat.IncomingFire",
+        "Combat.ThreatConfidence",
+        "Weapon.ReloadDurationSec"
+      ]
     },
     "Weapon.ExpectedRoundsPerSecond": {
       "type": "Float",
       "description": "Оценка текущего fire rate для выбранного поведения и профиля оружия. Используется в ammo pressure.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.EstimatedSecondsToEmpty": {
       "type": "Float",
@@ -500,12 +657,18 @@
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
       "aliases": [
         "PredictedTimeToEmpty"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Weapon.ReloadLeadTimeSec": {
       "type": "Float",
       "description": "Насколько заранее оружие должно искать укрытие перед перезарядкой. Выводится из длительности перезарядки и exposure policy.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Weapon.AmmoPressure": {
       "type": "Float",
@@ -517,6 +680,15 @@
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
       "aliases": [
         "AmmoPressure"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Weapon.AmmoInMag",
+        "Weapon.MagCapacity",
+        "Weapon.ExpectedRoundsPerSecond",
+        "Weapon.EstimatedSecondsToEmpty"
       ]
     },
     "Agent.HealthState": {
@@ -531,7 +703,10 @@
       "source": "Состояние агента / movement tasks",
       "aliases": [
         "HealthState"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Agent.Mobility": {
       "type": "Float",
@@ -543,7 +718,10 @@
       "source": "Состояние агента / movement tasks",
       "aliases": [
         "MobilityState"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Agent.MovementGait": {
       "type": "Enum",
@@ -553,7 +731,10 @@
         "Sprint"
       ],
       "description": "Планируемое намерение движения. Walk - медленно/тише/точнее, Jog - обычный тактический перебег, Sprint - быстрое перемещение без ближайшего огня.",
-      "source": "Состояние агента / movement tasks"
+      "source": "Состояние агента / movement tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Agent.CanFireInCurrentGait": {
       "type": "Bool",
@@ -561,6 +742,12 @@
       "source": "Состояние агента / movement tasks",
       "aliases": [
         "NotSprintingForFire"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Agent.MovementGait"
       ]
     },
     "Weapon.FireIntent": {
@@ -572,22 +759,39 @@
         "Suppress"
       ],
       "description": "Ближайшее намерение по оружию. Блокирует Sprint, если план ожидает aim/fire в ближайшее время.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Weapon.IsAimedAtThreat": {
       "type": "Bool",
       "description": "Оружие наведено на активную угрозу или запланированную threat point.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Weapon.Readiness",
+        "Combat.ThreatActor",
+        "Combat.ThreatLocation"
+      ]
     },
     "Weapon.IsFiring": {
       "type": "Bool",
       "description": "Активна ли сейчас task стрельбы.",
-      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks"
+      "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.SharedThreatLocation": {
       "type": "Vector",
       "description": "Лучшее squad-shared положение угрозы. Это не дубль Combat.ThreatLocation, а общий факт сквада.",
-      "source": "service.SquadFactSync / память сквада"
+      "source": "service.SquadFactSync / память сквада",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.SharedThreatConfidence": {
       "type": "Float",
@@ -596,7 +800,10 @@
         1
       ],
       "description": "Уверенность squad-shared информации об угрозе. Может отличаться от локальной Combat.ThreatConfidence.",
-      "source": "service.SquadFactSync / память сквада"
+      "source": "service.SquadFactSync / память сквада",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.SharedThreatAwareness": {
       "type": "Float",
@@ -605,17 +812,26 @@
         1
       ],
       "description": "Оценка сквада, что угроза знает про группу или смотрит в сектор группы.",
-      "source": "service.SquadFactSync / память сквада"
+      "source": "service.SquadFactSync / память сквада",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.AllyUnderFire": {
       "type": "Bool",
       "description": "True, когда союзник недавно получил попадание, умер или рядом с ним был near miss, достаточный для тактическое прерывание.",
-      "source": "service.SquadFactSync / память сквада"
+      "source": "service.SquadFactSync / память сквада",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.AllyCasualtyLocation": {
       "type": "Vector",
       "description": "Место недавнего попадания/смерти союзника, если shooter напрямую неизвестен.",
-      "source": "service.SquadFactSync / память сквада"
+      "source": "service.SquadFactSync / память сквада",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Planner.Focus": {
       "type": "Enum",
@@ -631,12 +847,18 @@
         "AmmoManagement"
       ],
       "description": "Debug/telemetry key для visual logger и анализа текущего фокуса планировщика.",
-      "source": "Planner/task telemetry"
+      "source": "Planner/task telemetry",
+      "runtime_role": "telemetry",
+      "role_label": "Telemetry",
+      "role_note": "Отладочный/визуальный key для логов и анализа. На выбор плана не должен влиять напрямую."
     },
     "Objective.GuardPost": {
       "source": "Назначение задачи / service.UpdateObjectiveFacts",
       "type": "Object",
-      "description": "Текущий или выбранный пост охраны внутри Objective.GuardArea. Нужен для сравнения текущей позиции с более полезными guard post кандидат."
+      "description": "Текущий или выбранный пост охраны внутри Objective.GuardArea. Нужен для сравнения текущей позиции с более полезными guard post кандидат.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Objective.GuardPostExposure": {
       "source": "Назначение задачи / service.UpdateObjectiveFacts",
@@ -648,6 +870,14 @@
       "description": "Оценка открытости guard post для известных опасных направлений. Чем выше значение, тем хуже пост для живучести.",
       "aliases": [
         "ExposureAtPost"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Objective.GuardPost",
+        "Combat.ThreatLocation",
+        "Combat.IncomingFire"
       ]
     },
     "Objective.GuardSectorCoverageScore": {
@@ -660,6 +890,13 @@
       "description": "Насколько guard post покрывает назначенный сектор наблюдения. Используется вместе с exposure/risk, чтобы не бегать к посту только из-за геометрии.",
       "aliases": [
         "SectorCoverageScore"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Objective.GuardPost",
+        "Objective.GuardArea"
       ]
     },
     "Combat.CriticalSurvivalNeeded": {
@@ -668,6 +905,15 @@
       "description": "Жесткий survival gate. True только когда короткий риск смерти достаточно высокий, чтобы перебить обычный бой или задача-задачу.",
       "aliases": [
         "CriticalSurvivalNeeded"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability",
+        "Combat.IncomingFire",
+        "Agent.HealthState"
       ]
     },
     "Combat.ThreatConfirmed": {
@@ -676,6 +922,15 @@
       "description": "Есть подтвержденная угроза: direct LOS, свежий LKP с высокой уверенностью или надежный squad/combat cue.",
       "aliases": [
         "ThreatConfirmed"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.ThreatConfidence",
+        "Combat.LOSQuality",
+        "Combat.LKPAgeSec",
+        "Squad.SharedThreatConfidence"
       ]
     },
     "Combat.ExplosiveRisk": {
@@ -688,7 +943,10 @@
       "description": "Риск взрыва или flush-ситуации рядом с текущей/планируемой позицией. Может принудительно выводить из укрытия.",
       "aliases": [
         "ExplosiveRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.LocalLOSBreakOffset": {
       "source": "Память боя / perception services / tactical tasks",
@@ -696,7 +954,10 @@
       "description": "Короткое локальное смещение для разрыва LOS без длинного перебегания к дальнему укрытию.",
       "aliases": [
         "LocalLOSBREAKOffset"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.NextSearchStep": {
       "source": "Память боя / perception services / tactical tasks",
@@ -704,7 +965,10 @@
       "description": "Следующий короткий cover-to-cover шаг поиска. Должен быть безопасен по маршруту, иначе поиск возвращается к задача alert.",
       "aliases": [
         "NextSearchStep"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.CanExposeForShot": {
       "source": "Память боя / perception services / tactical tasks",
@@ -712,6 +976,14 @@
       "description": "Можно ли безопасно коротко выглянуть/открыться для выстрела с учетом LOSQuality, exposure и текущего риска.",
       "aliases": [
         "CanExposeForShot"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.LOSQuality",
+        "Combat.ExpectedDeathRisk",
+        "Combat.CurrentPositionSurvivability"
       ]
     },
     "Combat.SuppressibleCoverRoute": {
@@ -720,7 +992,10 @@
       "description": "Маршрут к укрытию, который сам по себе слишком рискован, но становится приемлемым при коротком подавлении.",
       "aliases": [
         "SuppressibleCoverRoute"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Combat.ExpectedSuppressionRouteRisk": {
       "source": "Память боя / perception services / tactical tasks",
@@ -732,7 +1007,10 @@
       "description": "Ожидаемый риск suppressible route после учета эффекта краткого suppressive fire.",
       "aliases": [
         "ExpectedSuppressionRouteRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Combat.StimulusConfidence": {
       "source": "Память боя / perception services / tactical tasks",
@@ -744,7 +1022,10 @@
       "description": "Уверенность, что стимул достаточно полезен для поиска или тактического прерывания.",
       "aliases": [
         "StimulusConfidence"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Weapon.CanFire": {
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
@@ -752,6 +1033,15 @@
       "description": "Активное оружие может начать огонь прямо сейчас: есть патроны, оружие не занято перезарядкой/сменой, readiness и текущий gait не блокируют старт огня. Jog допустим; Sprint блокирует.",
       "aliases": [
         "WeaponCanFire"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Weapon.AmmoInMag",
+        "Weapon.Readiness",
+        "Agent.MovementGait",
+        "Weapon.IsFiring"
       ]
     },
     "Weapon.ReloadDurationSec": {
@@ -760,7 +1050,10 @@
       "description": "Ожидаемая длительность перезарядки для активного оружия.",
       "aliases": [
         "ReloadDuration"
-      ]
+      ],
+      "runtime_role": "config",
+      "role_label": "Config / threshold",
+      "role_note": "Настройка, threshold или weapon/AI tuning value. Лучше держать в data asset, настройках сервиса или профиле оружия, а не как per-agent Blackboard key."
     },
     "Weapon.ReloadCoverCandidate": {
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
@@ -768,7 +1061,10 @@
       "description": "Укрытие, выбранное именно для подготовки к перезарядке. Может совпадать с Combat.SelectedCover, но относится к ammo recovery контексту.",
       "aliases": [
         "ReloadCoverCandidate"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Weapon.ShouldReloadEarly": {
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
@@ -776,6 +1072,15 @@
       "description": "Сработало правило ранней перезарядки: перезарядка до пустого магазина выгодна из-за профиля оружия, прогнозируемого расхода и безопасного окна.",
       "aliases": [
         "ShouldReloadEarly"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Weapon.AmmoPressure",
+        "Weapon.EstimatedSecondsToEmpty",
+        "Weapon.ReloadLeadTimeSec",
+        "Weapon.SafeReloadWindow"
       ]
     },
     "Agent.Posture": {
@@ -785,12 +1090,18 @@
         "Standing",
         "Crouched"
       ],
-      "description": "Текущая стойка гуманоида. Prone не используется, потому что в игре нельзя лечь."
+      "description": "Текущая стойка гуманоида. Prone не используется, потому что в игре нельзя лечь.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.MemberPositions": {
       "source": "service.SquadFactSync / память сквада",
       "type": "Array<Vector>",
-      "description": "Позиции участников сквада, используемые для spacing, выбора patrol/guard points и избежания скучивания."
+      "description": "Позиции участников сквада, используемые для spacing, выбора patrol/guard points и избежания скучивания.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.ExposureRisk": {
       "source": "service.SquadFactSync / память сквада",
@@ -802,7 +1113,10 @@
       "description": "Риск раскрыть или подставить сквад при выбранном маршруте/позиции, особенно во время скрытого сближения.",
       "aliases": [
         "SquadExposureRisk"
-      ]
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key."
     },
     "Planner.TacticalInterruptionNeeded": {
       "source": "Planner/task telemetry",
@@ -810,6 +1124,15 @@
       "description": "Derived planner key: обычная назначенная задача должна быть прервана из-за survival, подтвержденный контакт, полезный стимул или Squad.AllyUnderFire.",
       "aliases": [
         "TacticalInterruptionNeeded"
+      ],
+      "runtime_role": "hint",
+      "role_label": "Hint variable",
+      "role_note": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+      "computed_from": [
+        "Combat.CriticalSurvivalNeeded",
+        "Combat.ThreatConfirmed",
+        "Combat.StimulusLocation",
+        "Squad.AllyUnderFire"
       ]
     },
     "Weapon.Readiness": {
@@ -823,22 +1146,34 @@
       "description": "Планируемое состояние оружия. Relaxed - оружие опущено и угрозы нет. Ready - оружие наготове, можно быстро стрелять менее точно. Aiming - агент целится в угрозу или threat point.",
       "aliases": [
         "WeaponReadiness"
-      ]
+      ],
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.CoveringFireRequest": {
       "source": "service.SquadFactSync / squad tactical coordinator",
       "type": "Bool",
-      "description": "Союзнику нужна короткая огневая поддержка для перебежки или смены укрытия. Не означает голосовую команду; это общий squad fact."
+      "description": "Союзнику нужна короткая огневая поддержка для перебежки или смены укрытия. Не означает голосовую команду; это общий squad fact.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.TeammateRepositioning": {
       "source": "service.SquadFactSync / squad tactical coordinator",
       "type": "Bool",
-      "description": "Один из участников сквада сейчас выполняет опасное перемещение между укрытиями."
+      "description": "Один из участников сквада сейчас выполняет опасное перемещение между укрытиями.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     },
     "Squad.CoveringFireLane": {
       "source": "service.SquadFactSync / squad tactical coordinator",
       "type": "Object",
-      "description": "Сектор или threat point, куда прикрывающий агент должен дать короткое подавление."
+      "description": "Сектор или threat point, куда прикрывающий агент должен дать короткое подавление.",
+      "runtime_role": "blackboard",
+      "role_label": "Blackboard key",
+      "role_note": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services."
     }
   },
   "decorators": {
@@ -5575,7 +5910,7 @@
     }
   },
   "blackboard_audit": {
-    "summary": "Аудит разделяет persisted Blackboard facts, derived/debug keys и config-like thresholds. Разрушительно удалять ключи в этой версии не нужно: часть ключей оставлена для читаемости графа и телеметрии, но в реализации их можно вычислять decorators/services без хранения отдельного Blackboard value.",
+    "summary": "Ключи разделены на runtime_role: Blackboard key, Hint variable, Config / threshold и Telemetry. Это не удаляет данные из визуализатора, но показывает, что действительно хранить в Blackboard, а что вычислять или держать в настройках.",
     "canonical_rule": "В reads/writes использовать Combat.*, Weapon.*, Agent.*, Squad.*, Objective.* или Planner.*. Короткие aliases сохраняются только для поиска и клика по старым текстам.",
     "kept_separate": [
       "Combat.ThreatLocation vs Squad.SharedThreatLocation",
@@ -5641,35 +5976,43 @@
         "keys": [
           "Agent.CanFireInCurrentGait"
         ],
-        "recommendation": "Derived от Agent.MovementGait. Можно не хранить как отдельный Blackboard key; decorator.NotSprintingForFire может вычислять это из MovementGait != Sprint."
+        "role": "hint",
+        "recommendation": "Не хранить отдельно, если decorator.NotSprintingForFire может читать Agent.MovementGait напрямую."
       },
       {
         "keys": [
           "Weapon.IsAimedAtThreat"
         ],
-        "recommendation": "Почти всегда выводится из Weapon.Readiness == Aiming и текущей aim target. Оставлять отдельно стоит только для debug/animation feedback."
+        "role": "hint",
+        "recommendation": "Выводить из Weapon.Readiness == Aiming и текущего aim target; хранить только если нужен feedback от animation/weapon component."
       },
       {
         "keys": [
-          "Weapon.ShouldReloadEarly"
+          "Weapon.ShouldReloadEarly",
+          "Weapon.SafeReloadWindow",
+          "Weapon.CanFire"
         ],
-        "recommendation": "Derived от AmmoPressure, EstimatedSecondsToEmpty, ReloadLeadTimeSec и SafeReloadWindow. Можно вычислять внутри decorator.ShouldReloadEarly."
+        "role": "hint",
+        "recommendation": "Считать в service/decorator из ammo, reload duration, readiness, gait и combat risk."
       },
       {
         "keys": [
           "Combat.CriticalSurvivalNeeded",
-          "Planner.TacticalInterruptionNeeded",
           "Combat.ThreatConfirmed",
-          "Combat.CanExposeForShot"
+          "Combat.CanExposeForShot",
+          "Planner.TacticalInterruptionNeeded"
         ],
-        "recommendation": "Derived gates. Удобны для визуализации и replan notifications, но в production могут быть computed decorators вместо persisted keys."
+        "role": "hint",
+        "recommendation": "Оставлять как hint для читаемости графа и replan notifications; реализация может вычислять их без persisted Blackboard storage."
       },
       {
         "keys": [
           "Combat.ThreatLocationReplanThreshold",
-          "Combat.ThreatLocationReplanMinIntervalSec"
+          "Combat.ThreatLocationReplanMinIntervalSec",
+          "Weapon.ReloadDurationSec"
         ],
-        "recommendation": "Скорее AI config/tuning params, а не per-agent Blackboard facts. Можно перенести в data asset или decorator/service settings."
+        "role": "config",
+        "recommendation": "Перенести в настройки сервиса, AI data asset или weapon profile."
       }
     ],
     "do_not_merge": [
@@ -5715,6 +6058,20 @@
         "reason": "Риски относятся к разным candidate plan contexts. Один общий Risk key создаст ошибки при сравнении укрытия, сближения и подавления."
       }
     ],
-    "recommended_persisted_core": "Для минимального runtime Blackboard хранить raw facts: Objective.*, Combat.Threat*/Stimulus*/Risk candidates, Weapon ammo/readiness, Agent state, Squad shared facts. Derived gates вычислять в decorators/services и писать в Blackboard только если это нужно для visual logger или replan notifications."
+    "recommended_persisted_core": "Persisted Blackboard core: objective facts, perception/threat memory, selected plan outputs, weapon ammo/readiness, agent state и squad shared facts. Hint variables считать в services/decorators и писать в HTN worldstate только если это полезно для visual logger, cost explainability или event-based replan.",
+    "role_counts": {
+      "blackboard": 56,
+      "hint": 28,
+      "config": 3,
+      "telemetry": 1
+    },
+    "implementation_rule": "Если значение нужно для task execution, perception memory, squad sync или выбранного plan output, это Blackboard key. Если значение полностью выводится из других фактов и нужно только для decorators/scoring, это Hint variable. Thresholds и tuning не должны становиться per-agent Blackboard keys."
+  },
+  "variable_role_policy": {
+    "blackboard": "Реальный runtime факт или выбранный planning output. Его разумно хранить в UE Blackboard или HTN worldstate и читать напрямую из tasks/decorators/services.",
+    "hint": "Вычисляемая подсказка для decorators, scoring, cost или визуального анализа. Ее можно кэшировать в HTN worldstate, но не обязательно хранить как постоянный UE Blackboard key.",
+    "config": "Настройка, threshold или weapon/AI tuning value. Лучше держать в data asset, настройках сервиса или профиле оружия, а не как per-agent Blackboard key.",
+    "telemetry": "Отладочный/визуальный key для логов и анализа. На выбор плана не должен влиять напрямую.",
+    "implementation_rule": "Если значение нужно для task execution, perception memory, squad sync или выбранного plan output, это Blackboard key. Если значение полностью выводится из других фактов и нужно только для decorators/scoring, это Hint variable. Thresholds и tuning не должны становиться per-agent Blackboard keys."
   }
 }
