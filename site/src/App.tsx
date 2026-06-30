@@ -46,6 +46,7 @@ const DEFAULT_MODEL_URL = `${import.meta.env.BASE_URL}data/humanoid_ue_htn_model
 const GRID = 24;
 
 type InspectorTab = "details" | "world" | "cases";
+type WorldVariableFilter = "all" | "blackboard" | "hint";
 type DetailRefTarget =
   | { type: "asset"; ref: string }
   | { type: "selection"; selection: NativeSelection };
@@ -1176,44 +1177,60 @@ const WorldVariablePanel: Component<{
   title: string;
   groups: WorldVariableGroup[];
   onSelect: (ref: string) => void;
-}> = (props) => (
-  <div class="list-panel">
-    <div class="list-panel-head">
-      {props.icon}
-      <div>
-        <h2>{props.title}</h2>
-        <p>{variableTotalLabel(props.groups)}</p>
+}> = (props) => {
+  const [filter, setFilter] = createSignal<WorldVariableFilter>("all");
+  const visibleGroups = createMemo(() => props.groups.filter((group) => filter() === "all" || group.role === filter()));
+
+  return (
+    <div class="list-panel">
+      <div class="list-panel-head">
+        {props.icon}
+        <div>
+          <h2>{props.title}</h2>
+          <p>{variableTotalLabel(props.groups)}</p>
+        </div>
+      </div>
+      <div class="variable-filter" role="group" aria-label="Variable filter">
+        <button class={filter() === "all" ? "active" : ""} type="button" onClick={() => setFilter("all")}>
+          All
+        </button>
+        <button class={filter() === "blackboard" ? "active" : ""} type="button" onClick={() => setFilter("blackboard")}>
+          Blackboard
+        </button>
+        <button class={filter() === "hint" ? "active" : ""} type="button" onClick={() => setFilter("hint")}>
+          Hints
+        </button>
+      </div>
+      <div class="variable-groups">
+        <For each={visibleGroups()}>
+          {(group) => (
+            <section class={`variable-group variable-${group.role}`}>
+              <div class="variable-group-head">
+                <div>
+                  <h3>{group.title}</h3>
+                  <p>{group.description}</p>
+                </div>
+                <span>{roleCountLabel(group.entries.length, group.role)}</span>
+              </div>
+              <div class="side-list">
+                <For each={group.entries}>
+                  {([id, value]) => (
+                    <button class={`side-row side-world side-world-${group.role}`} type="button" onClick={() => props.onSelect(id)}>
+                      <strong>{displayTitle(id, value, "world")}</strong>
+                      <code>{id}</code>
+                      <span class="side-role">{worldRoleLabel(group.role)}</span>
+                      <span>{displaySummary(value)}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </section>
+          )}
+        </For>
       </div>
     </div>
-    <div class="variable-groups">
-      <For each={props.groups}>
-        {(group) => (
-          <section class={`variable-group variable-${group.role}`}>
-            <div class="variable-group-head">
-              <div>
-                <h3>{group.title}</h3>
-                <p>{group.description}</p>
-              </div>
-              <span>{roleCountLabel(group.entries.length, group.role)}</span>
-            </div>
-            <div class="side-list">
-              <For each={group.entries}>
-                {([id, value]) => (
-                  <button class={`side-row side-world side-world-${group.role}`} type="button" onClick={() => props.onSelect(id)}>
-                    <strong>{displayTitle(id, value, "world")}</strong>
-                    <code>{id}</code>
-                    <span class="side-role">{worldRoleLabel(group.role)}</span>
-                    <span>{displaySummary(value)}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-          </section>
-        )}
-      </For>
-    </div>
-  </div>
-);
+  );
+};
 
 const RegistryPanel: Component<{
   icon: JSX.Element;
@@ -1324,17 +1341,27 @@ function pluralRu(count: number, [one, few, many]: [string, string, string]) {
   return many;
 }
 
-const RefButtons: Component<{ refs: string[]; kind: NativeSelection["kind"]; onSelect: (selection: NativeSelection) => void }> = (props) => (
-  <div class="ref-chip-list">
-    <For each={props.refs}>
-      {(ref) => (
-        <button class={`ref-chip ref-${props.kind}`} type="button" onClick={() => props.onSelect({ kind: props.kind, ref })}>
-          {ref}
-        </button>
-      )}
-    </For>
-  </div>
-);
+const RefButtons: Component<{ refs: string[]; kind: NativeSelection["kind"]; onSelect: (selection: NativeSelection) => void }> = (props) => {
+  const ctx = useContext(DetailLinkContext);
+
+  return (
+    <div class="ref-chip-list">
+      <For each={props.refs}>
+        {(ref) => {
+          const selection = (): NativeSelection => ({ kind: props.kind, ref });
+          const tooltip = createMemo(() => (ctx ? modelRefTooltip(ctx, { type: "selection", selection: selection() }, ref) : undefined));
+
+          return (
+            <button class={`ref-chip ref-${props.kind}`} type="button" onClick={() => props.onSelect(selection())}>
+              {ref}
+              <ModelRefTooltip tooltip={tooltip()} />
+            </button>
+          );
+        }}
+      </For>
+    </div>
+  );
+};
 
 const DetailSection: Component<{ title: string; count?: number; children: JSX.Element }> = (props) => (
   <section class="detail-section">
@@ -1368,18 +1395,127 @@ function resolveModelRef(ctx: DetailLinkContextValue, token: string): DetailRefT
   return undefined;
 }
 
+type ModelRefTooltipData = {
+  kind: string;
+  title: string;
+  ref: string;
+  body?: string;
+};
+
+const ModelRefTooltip: Component<{ tooltip: ModelRefTooltipData | undefined }> = (props) => (
+  <Show when={props.tooltip}>
+    {(tooltip) => (
+      <span class="model-tooltip" role="tooltip">
+        <span class="tooltip-kind">{tooltip().kind}</span>
+        <strong>{tooltip().title}</strong>
+        <code>{tooltip().ref}</code>
+        <Show when={tooltip().body}>
+          <span>{tooltip().body}</span>
+        </Show>
+      </span>
+    )}
+  </Show>
+);
+
+function modelRefTooltip(ctx: DetailLinkContextValue, target: DetailRefTarget, fallbackText: string): ModelRefTooltipData | undefined {
+  if (target.type === "asset") {
+    const asset = ctx.model.htn_assets[target.ref];
+    return {
+      kind: "HTN asset",
+      title: asset?.title ?? fallbackText,
+      ref: target.ref,
+      body: shortTooltipText(asset?.description)
+    };
+  }
+
+  const selection = target.selection;
+  const entity = getSelectedEntity(ctx.model, selection) as Record<string, unknown> | undefined;
+  const ref = selection.ref;
+
+  if (selection.kind === "world") {
+    const worldKey = entity as UeWorldKey | undefined;
+    return {
+      kind: worldRoleLabel(worldRoleOf(worldKey, ref)),
+      title: ref,
+      ref,
+      body: shortTooltipText(worldKey?.description ?? worldRoleNote(worldKey, ref))
+    };
+  }
+
+  if (selection.kind === "decorator") {
+    const decorator = entity as UeDecorator | undefined;
+    return {
+      kind: "decorator",
+      title: compactDecoratorLabel(ctx.model, ref),
+      ref,
+      body: shortTooltipText(decorator?.description ?? decorator?.condition)
+    };
+  }
+
+  if (selection.kind === "service") {
+    const service = entity as UeService | undefined;
+    return {
+      kind: "service",
+      title: compactServiceLabel(ctx.model, ref),
+      ref,
+      body: shortTooltipText(service?.description ?? service?.replan)
+    };
+  }
+
+  if (selection.kind === "task") {
+    const task = entity as UeTaskSpec | undefined;
+    return {
+      kind: "task",
+      title: compactTaskTitle(ctx.model, ref),
+      ref,
+      body: shortTooltipText(task?.description ?? task?.execution)
+    };
+  }
+
+  if (selection.kind === "use_case") {
+    return {
+      kind: "use case",
+      title: typeof entity?.title === "string" ? entity.title : fallbackText,
+      ref,
+      body: shortTooltipText(entity?.analysis_notes ?? entity?.cost_notes)
+    };
+  }
+
+  if (selection.kind === "node") {
+    return {
+      kind: "node",
+      title: titleForSelection(ctx.model, selection),
+      ref,
+      body: shortTooltipText(entity?.description)
+    };
+  }
+
+  return {
+    kind: selectionKindLabel(selection.kind),
+    title: titleForSelection(ctx.model, selection),
+    ref,
+    body: shortTooltipText(entity?.description)
+  };
+}
+
+function shortTooltipText(value: unknown) {
+  const text = typeof value === "string" ? value : value ? formatValue(value) : "";
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+
 const ModelRefLink: Component<{ text: string; target: DetailRefTarget }> = (props) => {
   const ctx = useContext(DetailLinkContext);
   if (!ctx) return <>{props.text}</>;
 
   const className = () => (props.target.type === "asset" ? "inline-ref inline-asset" : `inline-ref inline-${props.target.selection.kind}`);
   const title = () => (props.target.type === "asset" ? "Открыть HTN asset" : "Показать в деталях");
+  const tooltip = createMemo(() => modelRefTooltip(ctx, props.target, props.text));
 
   return (
     <button
       class={className()}
       type="button"
-      title={title()}
+      aria-label={title()}
       onClick={(event) => {
         event.stopPropagation();
         if (props.target.type === "asset") {
@@ -1390,6 +1526,7 @@ const ModelRefLink: Component<{ text: string; target: DetailRefTarget }> = (prop
       }}
     >
       {props.text}
+      <ModelRefTooltip tooltip={tooltip()} />
     </button>
   );
 };

@@ -887,7 +887,9 @@ input {
 }
 
 .inline-ref {
-  display: inline;
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
   border: 0;
   border-radius: 5px;
   background: #eaf2ff;
@@ -899,6 +901,8 @@ input {
   line-height: inherit;
   padding: 0 3px;
   text-align: left;
+  vertical-align: baseline;
+  overflow: visible;
   overflow-wrap: anywhere;
 }
 
@@ -957,6 +961,82 @@ input {
   background: #ddd6fe;
 }
 
+.model-tooltip {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  width: min(320px, 72vw);
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+  color: #334155;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0;
+  padding: 9px 10px;
+  pointer-events: none;
+  text-align: left;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  visibility: hidden;
+  white-space: normal;
+}
+
+.model-tooltip::after {
+  position: absolute;
+  bottom: -5px;
+  left: 14px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid #cbd5e1;
+  border-bottom: 1px solid #cbd5e1;
+  background: #ffffff;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.inline-ref:hover .model-tooltip,
+.inline-ref:focus-visible .model-tooltip,
+.ref-chip:hover .model-tooltip,
+.ref-chip:focus-visible .model-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.tooltip-kind {
+  align-self: flex-start;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #475569;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+.model-tooltip strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.model-tooltip code {
+  color: #475569;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .method-list,
 .decomposition-list,
 .side-list,
@@ -970,6 +1050,36 @@ input {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.variable-filter {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  border-radius: 8px;
+  background: #e8eef7;
+  padding: 4px;
+}
+
+.variable-filter button {
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 7px;
+}
+
+.variable-filter button:hover {
+  background: #f8fafc;
+}
+
+.variable-filter button.active {
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .variable-group {
@@ -1100,8 +1210,9 @@ input {
 }
 
 .ref-chip {
+  position: relative;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid #d8dee9;
   border-radius: 999px;
   background: #ffffff;
