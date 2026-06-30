@@ -92,7 +92,7 @@ const App: Component = () => {
 
   onMount(async () => {
     try {
-      const response = await fetch(DEFAULT_MODEL_URL);
+      const response = await fetch(`${DEFAULT_MODEL_URL}?v=${Date.now()}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       loadModel((await response.json()) as UeNativeModel);
     } catch (error) {
@@ -1024,14 +1024,14 @@ const WorldKeyDetails: Component<{ refId: string; worldKey: UeWorldKey | undefin
     <DetailSection title="Variable">
       <div class="kv-list">
         <KeyValue name="type" value={props.worldKey?.type} />
-        <KeyValue name="role" value={worldRoleLabel(worldRoleOf(props.worldKey))} />
+        <KeyValue name="role" value={worldRoleLabel(worldRoleOf(props.worldKey, props.refId))} />
         <KeyValue name="source" value={props.worldKey?.source} />
         <KeyValue name="range" value={props.worldKey?.range} />
       </div>
     </DetailSection>
-    <Show when={props.worldKey?.role_note}>
+    <Show when={worldRoleNote(props.worldKey, props.refId)}>
       <DetailSection title="Роль в реализации">
-        <ValueView value={props.worldKey?.role_note} />
+        <ValueView value={worldRoleNote(props.worldKey, props.refId)} />
       </DetailSection>
     </Show>
     <Show when={props.worldKey?.computed_from?.length}>
@@ -1137,6 +1137,40 @@ const WORLD_ROLE_META: Record<UeWorldKeyRole, { title: string; countForms: [stri
   }
 };
 
+const LEGACY_HINT_KEYS = new Set([
+  "Combat.ThreatLocationMoveDelta",
+  "Combat.ExpectedDeathRisk",
+  "Combat.CurrentPositionSurvivability",
+  "Combat.CoverRouteRisk",
+  "Combat.ReappearanceRisk",
+  "Combat.DistanceToThreat",
+  "Combat.ThreatAwarenessOfAgent",
+  "Combat.ThreatFacingAgent",
+  "Combat.ApproachRouteRisk",
+  "Weapon.SafeReloadWindow",
+  "Weapon.EstimatedSecondsToEmpty",
+  "Weapon.ReloadLeadTimeSec",
+  "Weapon.AmmoPressure",
+  "Agent.CanFireInCurrentGait",
+  "Weapon.IsAimedAtThreat",
+  "Objective.GuardPostExposure",
+  "Objective.GuardSectorCoverageScore",
+  "Combat.CriticalSurvivalNeeded",
+  "Combat.ThreatConfirmed",
+  "Combat.ExplosiveRisk",
+  "Combat.CanExposeForShot",
+  "Combat.ExpectedSuppressionRouteRisk",
+  "Combat.StimulusConfidence",
+  "Weapon.CanFire",
+  "Weapon.ReloadCoverCandidate",
+  "Weapon.ShouldReloadEarly",
+  "Squad.ExposureRisk",
+  "Planner.TacticalInterruptionNeeded"
+]);
+
+const LEGACY_CONFIG_KEYS = new Set(["Combat.ThreatLocationReplanThreshold", "Combat.ThreatLocationReplanMinIntervalSec", "Weapon.ReloadDurationSec"]);
+const LEGACY_TELEMETRY_KEYS = new Set(["Planner.Focus"]);
+
 const WorldVariablePanel: Component<{
   icon: JSX.Element;
   title: string;
@@ -1231,21 +1265,28 @@ function groupWorldKeys(entries: [string, unknown][]): WorldVariableGroup[] {
       role,
       title: meta.title,
       description: meta.description,
-      entries: entries.filter(([, value]) => worldRoleOf(value) === role)
+      entries: entries.filter(([id, value]) => worldRoleOf(value, id) === role)
     };
   }).filter((group) => group.entries.length > 0);
 }
 
-function worldRoleOf(value: unknown): UeWorldKeyRole {
+function worldRoleOf(value: unknown, id?: string): UeWorldKeyRole {
   if (value && typeof value === "object") {
-    const role = (value as UeWorldKey).runtime_role;
+    const key = value as UeWorldKey;
+    const role = key.runtime_role;
     if (role === "blackboard" || role === "hint" || role === "config" || role === "telemetry") return role;
+    return inferWorldRoleFromLegacyKey(key, id);
   }
   return "blackboard";
 }
 
 function worldRoleLabel(role: UeWorldKeyRole | undefined) {
   return WORLD_ROLE_META[role ?? "blackboard"].title.replace(/s$/, "");
+}
+
+function worldRoleNote(value: UeWorldKey | undefined, id?: string) {
+  const role = worldRoleOf(value, id);
+  return value?.role_note ?? WORLD_ROLE_META[role].description;
 }
 
 function roleCountLabel(count: number, role: UeWorldKeyRole) {
@@ -1257,6 +1298,22 @@ function variableTotalLabel(groups: WorldVariableGroup[]) {
   const hints = groups.find((group) => group.role === "hint")?.entries.length ?? 0;
   const blackboard = groups.find((group) => group.role === "blackboard")?.entries.length ?? 0;
   return `${roleCountLabel(blackboard, "blackboard")} / ${roleCountLabel(hints, "hint")} / ${total} всего`;
+}
+
+function inferWorldRoleFromLegacyKey(key: UeWorldKey, id?: string): UeWorldKeyRole {
+  if (id && LEGACY_HINT_KEYS.has(id)) return "hint";
+  if (id && LEGACY_CONFIG_KEYS.has(id)) return "config";
+  if (id && LEGACY_TELEMETRY_KEYS.has(id)) return "telemetry";
+
+  const aliases = key.aliases ?? [];
+  const description = key.description ?? "";
+  const source = key.source ?? "";
+  const text = `${description} ${source} ${aliases.join(" ")}`;
+
+  if (/threshold|interval|duration|длительност|интервал|порог/i.test(text)) return "config";
+  if (/debug|telemetry|visual logger|отлад/i.test(text)) return "telemetry";
+  if (/Derived|выводится|вычис|оценка|риск|pressure|confidence|quality|score|можно ли|способность|давление|живучесть|стоимость|считает|прогноз/i.test(text)) return "hint";
+  return "blackboard";
 }
 
 function pluralRu(count: number, [one, few, many]: [string, string, string]) {
