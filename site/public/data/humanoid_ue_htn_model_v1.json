@@ -20,7 +20,9 @@
     "Survival имеет жесткий приоритет только при высоком краткосрочном риске смерти. Ранения меняют пороги и стоимость, но не должны навсегда удерживать survival после стабилизации.",
     "Пустой магазин должен уводить план в ammo recovery, укрытие или survival, а не в перемещение между огневыми углами без рабочего оружия.",
     "Weapon.Readiness моделируется отдельно от gait и posture: Relaxed вне угрозы, Ready при настороженности/поиске/прикрытии, Aiming перед точным огнем.",
-    "Боевые задачи должны явно возвращать оружие из Aiming в Ready после окна огня, а спокойные objective-задачи должны опускать оружие обратно в Relaxed, чтобы агент не ходил постоянно с поднятой пушкой."
+    "Боевые задачи должны явно возвращать оружие из Aiming в Ready после окна огня, а спокойные objective-задачи должны опускать оружие обратно в Relaxed, чтобы агент не ходил постоянно с поднятой пушкой.",
+    "Gait задает намерение движения, а не режим стрельбы. Walk используется для тихого/точного медленного движения, Jog - обычный тактический перебег, Sprint - быстрый уход без ближайшего огня.",
+    "Стрельба из Jog замедляется weapon/animation component автоматически; HTN не должен вставлять SetGaitWalk только ради начала огня."
   ],
   "ue_htn_contract": {
     "planner_goal": "UE HTN строит допустимые планы и выбирает валидный план с минимальной суммарной положительной стоимостью.",
@@ -57,7 +59,7 @@
   },
   "cost_model": {
     "unit": "абстрактная положительная стоимость плана",
-    "formula_hint": "task_base + path_cost + exposure_penalty + death_risk_penalty + ammo_penalty + time_penalty + uncertainty_penalty + coordination_penalty + premature_reveal_penalty + distance_mismatch_penalty + wrong_gait_penalty + wrong_weapon_readiness_penalty",
+    "formula_hint": "task_base + path_cost + exposure_penalty + death_risk_penalty + ammo_penalty + time_penalty + uncertainty_penalty + coordination_penalty + premature_reveal_penalty + distance_mismatch_penalty + movement_intent_penalty + wrong_weapon_readiness_penalty",
     "weights": {
       "path_cost_per_meter": 1,
       "time_cost_per_second": 4,
@@ -70,13 +72,13 @@
       "reload_vulnerability_penalty": 90,
       "premature_reveal_penalty": 95,
       "distance_mismatch_penalty": 35,
-      "wrong_gait_penalty": 75,
       "sprint_fire_blocker_penalty": 999,
       "threat_uncertainty_penalty": 35,
       "wounded_mobility_penalty": 45,
       "squad_spacing_penalty": 15,
       "wrong_weapon_readiness_penalty": 55,
-      "weapon_readiness_transition_cost": 5
+      "weapon_readiness_transition_cost": 5,
+      "movement_intent_penalty": 75
     },
     "hard_invalid_thresholds": {
       "max_expected_death_risk_for_open_move": 0.62,
@@ -101,7 +103,8 @@
       "threat_uncertainty_penalty",
       "squad_spacing_penalty",
       "wrong_weapon_readiness_penalty",
-      "weapon_readiness_transition_cost"
+      "weapon_readiness_transition_cost",
+      "movement_intent_penalty"
     ]
   },
   "worldstate_keys": {
@@ -549,12 +552,12 @@
         "Jog",
         "Sprint"
       ],
-      "description": "Планируемый gait. Walk позволяет стрелять, Jog нужен для коротких тактических перемещений, Sprint самый быстрый, но блокирует огонь.",
+      "description": "Планируемое намерение движения. Walk - медленно/тише/точнее, Jog - обычный тактический перебег, Sprint - быстрое перемещение без ближайшего огня.",
       "source": "Состояние агента / movement tasks"
     },
     "Agent.CanFireInCurrentGait": {
       "type": "Bool",
-      "description": "Derived key от Agent.MovementGait. True только для Walk; Jog/Sprint блокируют стрельбу до переключения обратно.",
+      "description": "Derived key от Agent.MovementGait. False только для Sprint. В Jog агент может начать огонь, а weapon/animation component сам замедлит движение.",
       "source": "Состояние агента / movement tasks",
       "aliases": [
         "NotSprintingForFire"
@@ -746,7 +749,7 @@
     "Weapon.CanFire": {
       "source": "Weapon component / service.UpdateAmmoPressure / weapon tasks",
       "type": "Bool",
-      "description": "Активное оружие может стрелять прямо сейчас: есть патроны, оружие не занято перезарядкой/сменой, а gait допускает огонь.",
+      "description": "Активное оружие может начать огонь прямо сейчас: есть патроны, оружие не занято перезарядкой/сменой, readiness и текущий gait не блокируют старт огня. Jog допустим; Sprint блокирует.",
       "aliases": [
         "WeaponCanFire"
       ]
@@ -1213,18 +1216,19 @@
     "decorator.NotSprintingForFire": {
       "kind": "built_in_composition",
       "ue_class": "UHTNDecorator_Blackboard",
-      "description": "Проходит, если текущий gait позволяет стрелять.",
+      "description": "Проходит, если агент не находится в Sprint. Walk не требуется: при старте огня из Jog движение замедляет weapon/animation component.",
       "reads": [
         "Agent.MovementGait",
         "Agent.CanFireInCurrentGait"
       ],
-      "condition": "Agent.MovementGait == Walk AND Agent.CanFireInCurrentGait == true",
+      "condition": "Agent.MovementGait != Sprint AND Agent.CanFireInCurrentGait == true",
       "check_time": {
         "plan_enter": true,
         "plan_recheck": true,
         "tick": true,
         "event_based": true
-      }
+      },
+      "default_alternative": "Если нужен огонь прямо сейчас, не планировать Sprint; отдельный SetGaitWalk ради стрельбы не нужен."
     },
     "decorator.SprintAllowedNoImmediateFire": {
       "kind": "custom",
@@ -1391,7 +1395,7 @@
         "Weapon.CanFire",
         "Agent.CanFireInCurrentGait"
       ],
-      "condition": "Squad.CoveringFireRequest == true AND Squad.TeammateRepositioning == true AND Combat.ThreatConfidence >= 0.45 AND Combat.CanExposeForShot == true AND Weapon.CanFire == true AND Agent.CanFireInCurrentGait == true",
+      "condition": "Squad.CoveringFireRequest == true AND Squad.TeammateRepositioning == true AND Combat.ThreatConfidence >= 0.45 AND Combat.CanExposeForShot == true AND Weapon.CanFire == true AND Agent.MovementGait != Sprint",
       "check_time": {
         "plan_enter": true,
         "plan_recheck": true,
@@ -1646,10 +1650,10 @@
     "task.SetGaitWalk": {
       "kind": "built_in_or_custom",
       "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
-      "description": "Пишет Agent.MovementGait = Walk как факт планирования. Это влияет на time/cost окна огня.",
+      "description": "Пишет Agent.MovementGait = Walk для медленного, тихого или точного перемещения. Не используется как обязательная подготовка к стрельбе.",
       "cost": {
         "base": 1,
-        "formula": "small animation/acceleration transition cost"
+        "formula": "movement_intent_transition_cost + slow_movement_time_cost"
       },
       "effects": [
         "Agent.MovementGait = Walk",
@@ -1659,23 +1663,23 @@
     "task.SetGaitJog": {
       "kind": "built_in_or_custom",
       "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
-      "description": "Пишет Agent.MovementGait = Jog для короткого тактического перемещения без ближайшего окна огня.",
+      "description": "Пишет Agent.MovementGait = Jog для обычного тактического перебега между укрытиями или точками. Если агент начнет стрелять, animation/weapon component замедлит движение.",
       "cost": {
         "base": 1,
-        "formula": "small animation/acceleration transition cost"
+        "formula": "movement_intent_transition_cost"
       },
       "effects": [
         "Agent.MovementGait = Jog",
-        "Agent.CanFireInCurrentGait = false"
+        "Agent.CanFireInCurrentGait = true"
       ]
     },
     "task.SetGaitSprint": {
       "kind": "built_in_or_custom",
       "ue_class": "UHTNTask_SetValue or UTAHTNTask_SetMovementGait",
-      "description": "Пишет Agent.MovementGait = Sprint для быстрого ухода или достижения укрытия. Кандидаты огня должны быть неактивны.",
+      "description": "Пишет Agent.MovementGait = Sprint для быстрого ухода или достижения точки, когда ближайшее окно огня не планируется.",
       "cost": {
         "base": 1,
-        "formula": "small animation/acceleration transition cost - fast_hide_bonus_as_cost_reduction"
+        "formula": "movement_intent_transition_cost - fast_move_time_gain + sprint_fire_blocker_penalty_if_fire_expected"
       },
       "effects": [
         "Agent.MovementGait = Sprint",
@@ -1688,7 +1692,7 @@
     "task.AimWeaponAtThreat": {
       "kind": "custom",
       "ue_class": "UTAHTNTask_AimWeaponAtThreat",
-      "description": "Переводит оружие из Ready в Aiming и наводит его на Combat.ThreatActor, Combat.ThreatLocation или Squad.CoveringFireLane.",
+      "description": "Переводит оружие из Ready в Aiming и наводит его на Combat.ThreatActor, Combat.ThreatLocation или Squad.CoveringFireLane. Если агент был в Jog, стрельба дальше замедлит движение без отдельного SetGaitWalk.",
       "cost": {
         "base": 4,
         "formula": "aim_time * time_cost + exposure_penalty"
@@ -1731,7 +1735,7 @@
         "Может вызвать Replan, когда оружие больше не может стрелять",
         "Weapon.Readiness = Aiming"
       ],
-      "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
+      "execution": "При AmmoInMag == 0, потере LOS или Sprint остановить огонь и запросить replan/event decorator update. Jog при старте огня замедляется анимацией."
     },
     "task.StartSuppressiveFire": {
       "kind": "custom",
@@ -1759,7 +1763,7 @@
         "Weapon.Readiness = Aiming",
         "Squad.TeammateRepositioning получает окно прикрытия, если это squad covering fire"
       ],
-      "execution": "При AmmoInMag == 0, потере LOS или запрете огня в текущем gait остановить огонь и запросить replan/event decorator update."
+      "execution": "При AmmoInMag == 0, потере LOS или Sprint остановить огонь и запросить replan/event decorator update. Jog при старте огня замедляется анимацией."
     },
     "task.StopWeaponFire": {
       "kind": "custom",
@@ -3370,12 +3374,13 @@
         },
         "walk_suppress_move": {
           "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Set fire movement pace",
+          "task_ref": "task.SetGaitJog",
+          "title": "Темп движения под подавлением",
           "layout": {
             "col": 5,
             "lane": 4
-          }
+          },
+          "description": "Намерение движения остается тактическим перебегом; короткая стрельба во вторичной ветке сама замедлит агента."
         },
         "aim_suppress": {
           "type": "task",
@@ -3615,12 +3620,13 @@
         },
         "walk_close_fight": {
           "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Set close-fight pace",
+          "task_ref": "task.SetGaitJog",
+          "title": "Темп отхода к укрытию",
           "layout": {
             "col": 3,
             "lane": 0
-          }
+          },
+          "description": "Отход к укрытию планируется как тактический перебег. Если вторичная ветка стреляет, движение замедляется автоматически."
         },
         "move_close_cover": {
           "type": "task",
@@ -3729,15 +3735,6 @@
             "lane": 2
           }
         },
-        "walk_for_burst": {
-          "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Set fire movement pace",
-          "layout": {
-            "col": 3,
-            "lane": 2
-          }
-        },
         "aim_burst": {
           "type": "task",
           "task_ref": "task.AimWeaponAtThreat",
@@ -3746,7 +3743,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 4,
+            "col": 3,
             "lane": 2
           }
         },
@@ -3761,7 +3758,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 5,
+            "col": 4,
             "lane": 2
           }
         },
@@ -3770,7 +3767,7 @@
           "task_ref": "task.StopWeaponFire",
           "title": "Stop controlled fire",
           "layout": {
-            "col": 6,
+            "col": 5,
             "lane": 2
           }
         },
@@ -3779,7 +3776,7 @@
           "task_ref": "task.WaitInCoverReassess",
           "title": "Recover and reassess",
           "layout": {
-            "col": 7,
+            "col": 6,
             "lane": 2
           }
         },
@@ -4042,13 +4039,7 @@
         },
         {
           "from": "peek",
-          "to": "walk_for_burst",
-          "order": 1
-        },
-        {
-          "from": "walk_for_burst",
-          "to": "aim_burst",
-          "order": 2
+          "to": "aim_burst"
         },
         {
           "from": "aim_burst",
@@ -4200,15 +4191,6 @@
             "lane": 0
           }
         },
-        "walk_ambush_aim": {
-          "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Set aiming movement pace",
-          "layout": {
-            "col": 5,
-            "lane": 0
-          }
-        },
         "aim_ambush": {
           "type": "task",
           "task_ref": "task.AimWeaponAtThreat",
@@ -4217,7 +4199,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 6,
+            "col": 4,
             "lane": 0
           }
         },
@@ -4229,7 +4211,7 @@
             "decorator.ThreatUnawareOrNotFacing"
           ],
           "layout": {
-            "col": 7,
+            "col": 5,
             "lane": 0
           }
         },
@@ -4268,13 +4250,7 @@
         },
         {
           "from": "move_approach",
-          "to": "walk_ambush_aim",
-          "order": 3
-        },
-        {
-          "from": "walk_ambush_aim",
-          "to": "aim_ambush",
-          "order": 4
+          "to": "aim_ambush"
         },
         {
           "from": "aim_ambush",
@@ -5084,15 +5060,6 @@
             "lane": 1
           }
         },
-        "walk_for_fire": {
-          "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Set fire movement pace",
-          "layout": {
-            "col": 3,
-            "lane": 0
-          }
-        },
         "aim": {
           "type": "task",
           "task_ref": "task.AimWeaponAtThreat",
@@ -5101,7 +5068,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 4,
+            "col": 3,
             "lane": 0
           }
         },
@@ -5116,7 +5083,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 5,
+            "col": 4,
             "lane": 0
           }
         },
@@ -5125,7 +5092,7 @@
           "task_ref": "task.StopWeaponFire",
           "title": "Stop controlled fire",
           "layout": {
-            "col": 6,
+            "col": 5,
             "lane": 0
           }
         },
@@ -5152,13 +5119,8 @@
         },
         {
           "from": "prefer_fire_window",
-          "to": "walk_for_fire",
-          "branch": "top: fire opportunity"
-        },
-        {
-          "from": "walk_for_fire",
           "to": "aim",
-          "order": 2
+          "branch": "top: fire opportunity"
         },
         {
           "from": "aim",
@@ -5196,21 +5158,12 @@
             "lane": 0
           }
         },
-        "walk_for_cover": {
-          "type": "task",
-          "task_ref": "task.SetGaitWalk",
-          "title": "Темп для огня",
-          "layout": {
-            "col": 1,
-            "lane": 0
-          }
-        },
         "ready_weapon": {
           "type": "task",
           "task_ref": "task.SetWeaponReady",
           "title": "Оружие наготове",
           "layout": {
-            "col": 2,
+            "col": 1,
             "lane": 0
           }
         },
@@ -5222,7 +5175,7 @@
             "decorator.NotSprintingForFire"
           ],
           "layout": {
-            "col": 3,
+            "col": 2,
             "lane": 0
           }
         },
@@ -5236,7 +5189,7 @@
             "decorator.CanExposeForShot"
           ],
           "layout": {
-            "col": 4,
+            "col": 3,
             "lane": 0
           }
         },
@@ -5245,7 +5198,7 @@
           "task_ref": "task.StopWeaponFire",
           "title": "Вернуться в готовность",
           "layout": {
-            "col": 5,
+            "col": 4,
             "lane": 0
           }
         },
@@ -5254,7 +5207,7 @@
           "task_ref": "task.WaitInCoverReassess",
           "title": "Переоценить после прикрытия",
           "layout": {
-            "col": 6,
+            "col": 5,
             "lane": 0
           }
         }
@@ -5262,10 +5215,6 @@
       "edges": [
         {
           "from": "root",
-          "to": "walk_for_cover"
-        },
-        {
-          "from": "walk_for_cover",
           "to": "ready_weapon"
         },
         {
@@ -5331,7 +5280,6 @@
         "Choose lowest-risk confirmed-contact plan",
         "candidate: covered fire",
         "Peek and sample LOS",
-        "Set fire movement pace",
         "Aim weapon at threat",
         "Start controlled fire",
         "Stop controlled fire",
@@ -5357,7 +5305,7 @@
         "Choose lowest-risk confirmed-contact plan",
         "candidate: close fallback",
         "Find nearest fighting cover",
-        "Set close-fight pace",
+        "Темп отхода к укрытию",
         "Parallel: fight while falling back",
         "Move to nearest cover",
         "Prefer optional fire while falling back",
@@ -5504,7 +5452,6 @@
         "Find covered attack position",
         "Move for unseen approach",
         "Move unseen to attack position",
-        "Set aiming movement pace",
         "Aim from ambush angle",
         "Hold covered ambush angle"
       ],
@@ -5600,7 +5547,7 @@
         "Weapon.Readiness": "Ready",
         "Weapon.CanFire": true,
         "Weapon.AmmoInMag": 18,
-        "Agent.MovementGait": "Walk",
+        "Agent.MovementGait": "Jog",
         "Agent.CanFireInCurrentGait": true
       },
       "expected_plan_shape": [
@@ -5621,13 +5568,14 @@
       "readiness_expectations": [
         "Covering agent начинает из Ready.",
         "На короткое suppress окно переходит в Aiming.",
-        "После StopWeaponFire возвращается в Ready и ждет replan."
+        "После StopWeaponFire возвращается в Ready и ждет replan.",
+        "Если прикрывающий агент был в Jog, StartSuppressiveFire замедляет его через animation/weapon component без отдельной SetGaitWalk task."
       ],
       "cost_notes": "Кандидат должен выигрывать только если короткая exposure прикрывающего дешевле, чем риск союзника без прикрытия. AmmoPressure и CanExposeForShot ограничивают повторение."
     }
   },
   "blackboard_audit": {
-    "summary": "Короткие alias-имена в reads/writes заменены каноническими Blackboard keys с namespace-префиксами. Combat.* и Squad.Shared* оставлены отдельно: это локальная память агента и общие факты сквада.",
+    "summary": "Аудит разделяет persisted Blackboard facts, derived/debug keys и config-like thresholds. Разрушительно удалять ключи в этой версии не нужно: часть ключей оставлена для читаемости графа и телеметрии, но в реализации их можно вычислять decorators/services без хранения отдельного Blackboard value.",
     "canonical_rule": "В reads/writes использовать Combat.*, Weapon.*, Agent.*, Squad.*, Objective.* или Planner.*. Короткие aliases сохраняются только для поиска и клика по старым текстам.",
     "kept_separate": [
       "Combat.ThreatLocation vs Squad.SharedThreatLocation",
@@ -5686,6 +5634,87 @@
       "SpareMagazines -> Weapon.HasSpareMagazine",
       "ShouldReloadEarly -> Weapon.ShouldReloadEarly",
       "WeaponReadiness -> Weapon.Readiness"
-    ]
+    ],
+    "total_keys_after_review": 88,
+    "safe_merge_or_compute_candidates": [
+      {
+        "keys": [
+          "Agent.CanFireInCurrentGait"
+        ],
+        "recommendation": "Derived от Agent.MovementGait. Можно не хранить как отдельный Blackboard key; decorator.NotSprintingForFire может вычислять это из MovementGait != Sprint."
+      },
+      {
+        "keys": [
+          "Weapon.IsAimedAtThreat"
+        ],
+        "recommendation": "Почти всегда выводится из Weapon.Readiness == Aiming и текущей aim target. Оставлять отдельно стоит только для debug/animation feedback."
+      },
+      {
+        "keys": [
+          "Weapon.ShouldReloadEarly"
+        ],
+        "recommendation": "Derived от AmmoPressure, EstimatedSecondsToEmpty, ReloadLeadTimeSec и SafeReloadWindow. Можно вычислять внутри decorator.ShouldReloadEarly."
+      },
+      {
+        "keys": [
+          "Combat.CriticalSurvivalNeeded",
+          "Planner.TacticalInterruptionNeeded",
+          "Combat.ThreatConfirmed",
+          "Combat.CanExposeForShot"
+        ],
+        "recommendation": "Derived gates. Удобны для визуализации и replan notifications, но в production могут быть computed decorators вместо persisted keys."
+      },
+      {
+        "keys": [
+          "Combat.ThreatLocationReplanThreshold",
+          "Combat.ThreatLocationReplanMinIntervalSec"
+        ],
+        "recommendation": "Скорее AI config/tuning params, а не per-agent Blackboard facts. Можно перенести в data asset или decorator/service settings."
+      }
+    ],
+    "do_not_merge": [
+      {
+        "keys": [
+          "Combat.ThreatLocation",
+          "Combat.SearchAnchor",
+          "Combat.StimulusLocation"
+        ],
+        "reason": "Это разные уровни уверенности: текущая лучшая позиция угрозы, точка поиска и сырой стимул. Их объединение заставит агента вести себя так, будто звук или impact равны видимой цели."
+      },
+      {
+        "keys": [
+          "Combat.WeaponReportLocation",
+          "Combat.BulletImpactLocation",
+          "Combat.NearMissDirection",
+          "Combat.AllyHitReactionLocation"
+        ],
+        "reason": "Источники стимула дают разные направления, confidence и тактический смысл; объединять их в один raw key нельзя без потери поведения."
+      },
+      {
+        "keys": [
+          "Combat.ThreatLocation",
+          "Squad.SharedThreatLocation"
+        ],
+        "reason": "Локальная память агента и squad-shared факт могут отличаться по свежести и confidence."
+      },
+      {
+        "keys": [
+          "Agent.MovementGait",
+          "Agent.Posture",
+          "Weapon.Readiness"
+        ],
+        "reason": "Это независимые оси: скорость движения, стойка тела и состояние оружия."
+      },
+      {
+        "keys": [
+          "Combat.CoverRouteRisk",
+          "Combat.ApproachRouteRisk",
+          "Combat.ReappearanceRisk",
+          "Combat.ExpectedSuppressionRouteRisk"
+        ],
+        "reason": "Риски относятся к разным candidate plan contexts. Один общий Risk key создаст ошибки при сравнении укрытия, сближения и подавления."
+      }
+    ],
+    "recommended_persisted_core": "Для минимального runtime Blackboard хранить raw facts: Objective.*, Combat.Threat*/Stimulus*/Risk candidates, Weapon ammo/readiness, Agent state, Squad shared facts. Derived gates вычислять в decorators/services и писать в Blackboard только если это нужно для visual logger или replan notifications."
   }
 }

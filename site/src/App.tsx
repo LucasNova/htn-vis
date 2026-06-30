@@ -1106,7 +1106,7 @@ const RegistryPanel: Component<{
       {props.icon}
       <div>
         <h2>{props.title}</h2>
-        <p>{props.entries.length} видно</p>
+        <p>{registryCountLabel(props.entries.length, props.kind)}</p>
       </div>
     </div>
     <div class="side-list">
@@ -1122,6 +1122,28 @@ const RegistryPanel: Component<{
     </div>
   </div>
 );
+
+function registryCountLabel(count: number, kind: NativeSelection["kind"]) {
+  const forms: Record<NativeSelection["kind"], [string, string, string]> = {
+    node: ["нода", "ноды", "нод"],
+    decorator: ["decorator", "decorators", "decorators"],
+    service: ["service", "services", "services"],
+    task: ["task", "tasks", "tasks"],
+    world: ["ключ", "ключа", "ключей"],
+    use_case: ["кейс", "кейса", "кейсов"],
+    cost_model: ["модель стоимости", "модели стоимости", "моделей стоимости"],
+    contract: ["контракт", "контракта", "контрактов"]
+  };
+  return `${count} ${pluralRu(count, forms[kind])}`;
+}
+
+function pluralRu(count: number, [one, few, many]: [string, string, string]) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
 
 const RefButtons: Component<{ refs: string[]; kind: NativeSelection["kind"]; onSelect: (selection: NativeSelection) => void }> = (props) => (
   <div class="ref-chip-list">
